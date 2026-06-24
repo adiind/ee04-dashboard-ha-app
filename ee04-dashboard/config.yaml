@@ -1,0 +1,23 @@
+name: EE04 Spectra Dashboard
+slug: ee04_spectra_dashboard
+version: 1.0.0
+description: Home Assistant-owned renderer and action service for the EE04 Spectra ePaper dashboard.
+url: https://github.com/adiind/ee04-dashboard-ha-app
+arch:
+  - aarch64
+  - amd64
+startup: application
+init: false
+homeassistant_api: true
+map:
+  - config:rw
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: EE04 LAN action API
+options:
+  action_token: ""
+  timezone: America/Chicago
+schema:
+  action_token: password
+  timezone: str

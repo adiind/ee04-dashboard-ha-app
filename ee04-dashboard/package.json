@@ -1,0 +1,26 @@
+{
+  "name": "ee04-dashboard-ha-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc && vite build",
+    "start": "node dashboard-server.mjs",
+    "test:schedule": "node --test test/schedule.test.mjs",
+    "test:runtime": "node --test test/runtime-contract.test.mjs",
+    "test": "npm run test:schedule && npm run test:runtime"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "@types/node": "^25.0.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "lucide-react": "^0.560.0",
+    "playwright-core": "^1.57.0",
+    "pngjs": "^7.0.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7"
+  }
+}

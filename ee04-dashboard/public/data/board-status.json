@@ -1,0 +1,9 @@
+{
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "host": "ee04-spectra-dashboard.local",
+  "ok": false,
+  "error": "Home Assistant runtime not loaded",
+  "sensors": {},
+  "binarySensors": {},
+  "buttons": []
+}

@@ -1,0 +1,278 @@
+import type { LayoutDocument } from "./types";
+
+/**
+ * Built-in seed layout. Reproduces the original six hard-coded pages
+ * (Home, Rooms, Climate, Security, Agenda, Systems) exactly, using the v1
+ * widget/template vocabulary.
+ *
+ * This is the fallback used when `/data/layout.json` is missing or fails
+ * validation. The same content is written to `public/data/layout.json` as
+ * the active layout.
+ */
+export const defaultLayout: LayoutDocument = {
+  version: 1,
+  pages: [
+    {
+      id: "home",
+      label: "Home",
+      phrase: "now / next",
+      enabled: true,
+      template: "home-grid",
+      widgets: [
+        {
+          id: "home-weather",
+          type: "weatherHero",
+          slot: "hero",
+          binding: { kind: "preset", preset: "weather" },
+          options: { eyebrow: "Weather", icon: "CloudSun", showRange: true }
+        },
+        {
+          id: "home-mood",
+          type: "statusStrip",
+          slot: "mood",
+          binding: { kind: "preset", preset: "home.mood" },
+          options: { variant: "mood", icon: "CheckCircle2", eyebrow: "House Signal" }
+        },
+        {
+          id: "home-tiles",
+          type: "statTile",
+          slot: "tiles",
+          binding: { kind: "preset", preset: "home.tiles" },
+          options: {
+            columns: 1,
+            tiles: [
+              { preset: "home.tiles.indoor", icon: "Thermometer", label: "Indoor", tone: "red" },
+              { preset: "home.tiles.lights", icon: "Lightbulb", label: "Lights", tone: "yellow" },
+              { preset: "home.tiles.presence", icon: "Users", label: "Presence", tone: "green" },
+              { preset: "home.tiles.battery", icon: "Battery", label: "Low Bat", tone: "blue" }
+            ]
+          }
+        },
+        {
+          id: "home-agenda",
+          type: "agendaList",
+          slot: "agenda",
+          label: "Next",
+          binding: { kind: "preset", preset: "agenda" },
+          options: { variant: "simple", limit: 3, icon: "CalendarDays", emptyLabel: "No calendar items" }
+        }
+      ]
+    },
+    {
+      id: "rooms",
+      label: "Lights",
+      phrase: "rooms / signals",
+      enabled: true,
+      template: "rooms-grid",
+      widgets: [
+        {
+          id: "rooms-command",
+          type: "statusStrip",
+          slot: "command",
+          label: "Light Load",
+          binding: { kind: "preset", preset: "rooms.command" },
+          options: { variant: "roomCommand", icon: "LayoutGrid" }
+        },
+        {
+          id: "rooms-active-lights",
+          type: "entityList",
+          slot: "lights",
+          label: "On Right Now",
+          binding: { kind: "preset", preset: "lights.active" },
+          options: { icon: "Lightbulb", limit: 6, emptyLabel: "All lights off" }
+        },
+        {
+          id: "rooms-signal",
+          type: "entityList",
+          slot: "signal",
+          binding: { kind: "preset", preset: "rooms.signal" },
+          options: {
+            variant: "printerOrUnavailable",
+            iconPrimary: "Printer",
+            iconFallback: "Router",
+            labelPrimary: "Printer",
+            labelFallback: "Device Watch",
+            limit: 4,
+            emptyLabel: "All key signals reachable"
+          }
+        },
+        {
+          id: "rooms-status",
+          type: "statusStrip",
+          slot: "status",
+          label: "Room Pulse",
+          tone: "yellow",
+          binding: { kind: "preset", preset: "rooms.status" },
+          options: { variant: "roomStatus", icon: "Radio" }
+        }
+      ]
+    },
+    {
+      id: "climate",
+      label: "Air",
+      phrase: "temp / humidity",
+      enabled: true,
+      template: "climate-grid",
+      widgets: [
+        {
+          id: "climate-weather",
+          type: "weatherHero",
+          slot: "hero",
+          binding: { kind: "preset", preset: "weather" },
+          options: { eyebrow: "Outside", icon: "CloudSun", showRange: false, compact: true }
+        },
+        {
+          id: "climate-tiles",
+          type: "statTile",
+          slot: "tiles",
+          binding: { kind: "preset", preset: "climate.tiles" },
+          options: {
+            columns: 3,
+            tiles: [
+              { preset: "climate.tiles.indoor", icon: "Thermometer", label: "Indoor", tone: "red" },
+              { preset: "climate.tiles.humidity", icon: "Droplets", label: "Humidity", tone: "blue" },
+              { preset: "climate.tiles.fans", icon: "Wind", label: "Fans", tone: "green" }
+            ]
+          }
+        },
+        {
+          id: "climate-temp-sensors",
+          type: "entityList",
+          slot: "temp",
+          label: "Room Temps",
+          binding: { kind: "preset", preset: "climate.temperatureSensors" },
+          options: { icon: "Gauge", limit: 5, emptyLabel: "No extra temp sensors" }
+        },
+        {
+          id: "climate-humidity-sensors",
+          type: "entityList",
+          slot: "humidity",
+          label: "Humidity",
+          binding: { kind: "preset", preset: "climate.humiditySensors" },
+          options: { icon: "Droplets", limit: 5, emptyLabel: "No extra humidity sensors" }
+        }
+      ]
+    },
+    {
+      id: "security",
+      label: "Watch",
+      phrase: "motion / openings",
+      enabled: true,
+      template: "security-grid",
+      widgets: [
+        {
+          id: "security-hero",
+          type: "statusStrip",
+          slot: "hero",
+          binding: { kind: "preset", preset: "security.hero" },
+          options: { variant: "fort", iconCalm: "ShieldCheck", iconWarning: "DoorOpen", eyebrow: "Security" }
+        },
+        {
+          id: "security-motion",
+          type: "entityList",
+          slot: "motion",
+          label: "Motion",
+          binding: { kind: "preset", preset: "security.motion" },
+          options: { icon: "Activity", limit: 6, emptyLabel: "No motion" }
+        },
+        {
+          id: "security-issues",
+          type: "entityList",
+          slot: "issues",
+          label: "Doors / Power",
+          binding: { kind: "preset", preset: "security.issues" },
+          options: { icon: "AlertTriangle", limit: 5, emptyLabel: "No open/problem sensors reported" }
+        },
+        {
+          id: "security-offline",
+          type: "entityList",
+          slot: "offline",
+          label: "Signal Watch",
+          binding: { kind: "preset", preset: "availability.unavailable" },
+          options: { icon: "Router", limit: 5, emptyLabel: "Nothing notable offline" }
+        }
+      ]
+    },
+    {
+      id: "agenda",
+      label: "Day",
+      phrase: "calendar / transit",
+      enabled: true,
+      template: "agenda-grid",
+      widgets: [
+        {
+          id: "agenda-timeline",
+          type: "agendaList",
+          slot: "timeline",
+          label: "Today",
+          binding: { kind: "preset", preset: "agenda" },
+          options: { variant: "timeline", limit: 5, icon: "CalendarDays", emptyLabel: "No calendar items" }
+        },
+        {
+          id: "agenda-transit",
+          type: "heroNumber",
+          slot: "transit",
+          label: "Transit",
+          tone: "blue",
+          binding: { kind: "preset", preset: "transit" },
+          options: { icon: "Bus", limit: 2, emptyLabel: "No transit sensors" }
+        }
+      ]
+    },
+    {
+      id: "systems",
+      label: "Board",
+      phrase: "loop / health",
+      enabled: true,
+      template: "systems-grid",
+      widgets: [
+        {
+          id: "systems-hero",
+          type: "statusStrip",
+          slot: "hero",
+          binding: { kind: "preset", preset: "systems.hero" },
+          options: { variant: "systemsHero", icon: "Server", eyebrow: "EE04 Board" }
+        },
+        {
+          id: "systems-tiles",
+          type: "statTile",
+          slot: "tiles",
+          binding: { kind: "preset", preset: "systems.tiles" },
+          options: {
+            columns: 4,
+            tiles: [
+              { preset: "systems.tiles.mcp", icon: "Server", label: "MCP" },
+              { preset: "systems.tiles.boardBattery", icon: "BatteryCharging", label: "Board Bat", tone: "blue" },
+              { preset: "systems.tiles.runtime", icon: "Gauge", label: "Est Left" },
+              { preset: "systems.tiles.offline", icon: "Wifi", label: "Offline" }
+            ]
+          }
+        },
+        {
+          id: "systems-network",
+          type: "entityList",
+          slot: "network",
+          label: "Offline",
+          binding: { kind: "preset", preset: "availability.unavailable" },
+          options: { icon: "Router", limit: 5, emptyLabel: "No unavailable signals" }
+        },
+        {
+          id: "systems-battery",
+          type: "entityList",
+          slot: "battery",
+          label: "Low Batteries",
+          binding: { kind: "preset", preset: "batteries.low" },
+          options: { icon: "Battery", limit: 5, emptyLabel: "No low batteries" }
+        },
+        {
+          id: "systems-board",
+          type: "boardHealth",
+          slot: "board",
+          label: "Board Link",
+          binding: { kind: "preset", preset: "board.health" },
+          options: { icon: "Radio", limit: 5 }
+        }
+      ]
+    }
+  ]
+};

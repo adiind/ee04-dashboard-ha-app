@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-15T02:17:44.786Z",
+  "wled": {
+    "entityId": "light.wled",
+    "name": "WLED",
+    "ip": "10.0.0.26",
+    "ledCount": 172
+  },
+  "table": {
+    "corners": {
+      "topLeft": 58,
+      "topRight": 0,
+      "bottomRight": 145,
+      "bottomLeft": 86
+    }
+  },
+  "groups": [
+    {
+      "id": "group-b",
+      "name": "Group B",
+      "start": 121,
+      "end": 143,
+      "ranges": [
+        {
+          "start": 121,
+          "end": 143
+        }
+      ],
+      "color": "#ff9f1c",
+      "enabled": true
+    },
+    {
+      "id": "group-c",
+      "name": "Group C",
+      "start": 90,
+      "end": 111,
+      "ranges": [
+        {
+          "start": 90,
+          "end": 111
+        }
+      ],
+      "color": "#6ee7b7",
+      "enabled": true
+    },
+    {
+      "id": "group-mqekr2kh-4oyrc",
+      "name": "Group D",
+      "start": 100,
+      "end": 100,
+      "ranges": [
+        {
+          "start": 100,
+          "end": 100
+        }
+      ],
+      "color": "#ff4d6d",
+      "enabled": true
+    },
+    {
+      "id": "group-mqekvxq3-xt4w6",
+      "name": "Group E",
+      "start": 132,
+      "end": 132,
+      "ranges": [
+        {
+          "start": 132,
+          "end": 132
+        }
+      ],
+      "color": "#8b5cf6",
+      "enabled": true
+    }
+  ]
+}

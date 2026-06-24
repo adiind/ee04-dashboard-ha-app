@@ -1,0 +1,15 @@
+{
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "homeAssistantUrl": "Home Assistant",
+  "entityCount": 0,
+  "weather": { "condition": "unavailable" },
+  "room": { "presence": "unknown", "motion": "unknown" },
+  "lights": { "onCount": 0, "total": 0, "active": [] },
+  "printer": { "state": "unavailable" },
+  "agenda": [],
+  "transit": [],
+  "alerts": [],
+  "batteries": { "count": 0, "low": [] },
+  "updates": { "available": [] },
+  "availability": { "unavailableCount": 0, "unavailable": [] }
+}
