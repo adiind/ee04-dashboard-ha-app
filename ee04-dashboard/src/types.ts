@@ -112,6 +112,7 @@ export type BoardSensorValue = {
   state: string | number | boolean;
   unit?: string;
   deviceClass?: string;
+  cached?: boolean;
 };
 
 export type BoardRuntimeEstimate = {
@@ -144,6 +145,8 @@ export type BoardStatus = {
   sleepExpected?: boolean;
   ok: boolean;
   error?: string;
+  cachedFromLastOk?: boolean;
+  lastOkGeneratedAt?: string;
   deviceName?: string;
   macAddress?: string;
   esphomeVersion?: string;

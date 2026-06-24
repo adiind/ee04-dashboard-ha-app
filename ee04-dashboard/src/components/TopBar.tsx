@@ -1,5 +1,5 @@
 import { Home, Wifi } from "lucide-react";
-import { findBoardBattery } from "../lib/layoutPresets";
+import { findBoardBattery, formatBatteryLabel } from "../lib/layoutPresets";
 import { formatDate } from "../lib/format";
 import type { BoardStatus, DashboardData } from "../types";
 import type { LayoutPage } from "../layout/types";
@@ -20,6 +20,7 @@ export function TopBar({
   const renderedAt = new URLSearchParams(window.location.search).get("renderedAt");
   const now = new Date(renderedAt || data.generatedAt);
   const boardBattery = findBoardBattery(data, board);
+  const boardBatteryLabel = formatBatteryLabel(boardBattery);
   return (
     <header className="topbar">
       <div className="top-cluster brand">
@@ -37,7 +38,7 @@ export function TopBar({
         <Wifi size={18} strokeWidth={2.5} />
         <div>
           <strong>{source === "live" ? `${data.entityCount} HA` : "Mock"}</strong>
-          <span>{boardBattery ? `${boardBattery.state}${boardBattery.unit ?? "%"}` : board.ok ? "BAT waking" : "BAT pending"}</span>
+          <span>{boardBatteryLabel ?? (board.ok ? "BAT waking" : "BAT pending")}</span>
         </div>
       </div>
     </header>

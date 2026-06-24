@@ -11,6 +11,7 @@ const DIST = resolve(APP_ROOT, "dist");
 const OPTIONS_PATH = process.env.EE04_OPTIONS_PATH || "/data/options.json";
 const STATE_DIR = process.env.EE04_STATE_DIR || "/data/ee04-dashboard";
 const PAGE_STATE_PATH = join(STATE_DIR, "page-state.json");
+const BOARD_STATUS_PATH = join(STATE_DIR, "board-status.json");
 const IMAGE_PATH = process.env.EE04_IMAGE_PATH || "/config/www/eink/dashboard-spectra.png";
 const PORT = Number.parseInt(process.env.EE04_PORT || "8099", 10);
 const SUPERVISOR_URL = (process.env.EE04_SUPERVISOR_URL || "http://supervisor").replace(/\/$/, "");
@@ -234,7 +235,23 @@ function boardSensor(entity) {
   };
 }
 
-function buildBoardStatus(map, generatedAt) {
+function usableSensor(sensor) {
+  return sensor && cleanState(sensor.state) !== "unavailable";
+}
+
+function cachedSensor(current, previous) {
+  if (usableSensor(current)) return current;
+  if (usableSensor(previous)) return { ...previous, cached: true };
+  return undefined;
+}
+
+function mappedSensors(map, mappings, previous = {}) {
+  return Object.fromEntries(mappings
+    .map(([label, id]) => [label, cachedSensor(boardSensor(map.get(id)), previous[label])])
+    .filter(([, value]) => value));
+}
+
+function buildBoardStatus(map, generatedAt, previous = {}) {
   const sensorMappings = [
     ["Battery Voltage", "sensor.ee04_spectra_dashboard_battery_voltage"],
     ["Battery", "sensor.ee04_spectra_dashboard_battery"],
@@ -250,16 +267,20 @@ function buildBoardStatus(map, generatedAt) {
     ["Action Button", "binary_sensor.ee04_spectra_dashboard_action_button"],
     ["Next Page Button", "binary_sensor.ee04_spectra_dashboard_next_page_button"]
   ];
-  const sensors = Object.fromEntries(sensorMappings.map(([label, id]) => [label, boardSensor(map.get(id))]).filter(([, value]) => value));
-  const binarySensors = Object.fromEntries(binaryMappings.map(([label, id]) => [label, boardSensor(map.get(id))]).filter(([, value]) => value));
-  const battery = map.get("sensor.ee04_spectra_dashboard_battery");
+  const sensors = mappedSensors(map, sensorMappings, previous.sensors);
+  const binarySensors = mappedSensors(map, binaryMappings, previous.binarySensors);
+  const liveBattery = boardSensor(map.get("sensor.ee04_spectra_dashboard_battery"));
+  const ok = usableSensor(liveBattery);
+  const cachedFromLastOk = !ok && usableSensor(sensors.Battery);
   return {
     generatedAt,
     host: "ee04-spectra-dashboard.local",
     profile: "ha_native_boundary_30_60",
     sleepExpected: true,
-    ok: Boolean(battery && cleanState(battery.state) !== "unavailable"),
-    error: battery && cleanState(battery.state) === "unavailable" ? "Board asleep between scheduled wakes" : undefined,
+    ok,
+    cachedFromLastOk,
+    lastOkGeneratedAt: ok ? generatedAt : previous.lastOkGeneratedAt || previous.generatedAt,
+    error: ok ? undefined : cachedFromLastOk ? "Board asleep; using last good battery sample" : "Board asleep between scheduled wakes",
     sensors,
     binarySensors,
     buttons: []
@@ -271,6 +292,7 @@ async function buildRuntime() {
   if (!Array.isArray(states)) throw new Error("Home Assistant /api/states did not return an array.");
   const generatedAt = new Date().toISOString();
   const map = new Map(states.map((entity) => [entity.entity_id, entity]));
+  const previousBoard = await readJson(BOARD_STATUS_PATH, {});
   const weather = map.get(HINTS.weather);
   const temperature = firstAvailable(map, HINTS.temperature);
   const humidity = firstAvailable(map, HINTS.humidity);
@@ -325,7 +347,9 @@ async function buildRuntime() {
     media: { active: states.filter((entity) => entity.entity_id?.startsWith("media_player.") && ["playing", "paused", "on"].includes(entity.state)).map(entityRef).slice(0, 6), unavailable: states.filter((entity) => entity.entity_id?.startsWith("media_player.") && cleanState(entity.state) === "unavailable").map(entityRef).slice(0, 6) },
     mcp: { ok: true, serverName: "Home Assistant", toolCount: 0, promptCount: 0 }
   };
-  return { data, board: buildBoardStatus(map, generatedAt), catalog: buildCatalog(states, generatedAt) };
+  const board = buildBoardStatus(map, generatedAt, previousBoard);
+  await writeJsonAtomically(BOARD_STATUS_PATH, board);
+  return { data, board, catalog: buildCatalog(states, generatedAt) };
 }
 
 function nearestColor(r, g, b) {

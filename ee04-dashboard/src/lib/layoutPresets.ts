@@ -91,8 +91,19 @@ function printerValue(data: DashboardData) {
 function batteryValue(data: DashboardData) {
   const lowest = data.batteries.lowest;
   if (!lowest) return "--";
-  const numeric = Number.parseFloat(lowest.state);
-  return Number.isFinite(numeric) ? `${Math.round(numeric)}%` : lowest.state;
+  return formatBatteryLabel(lowest) ?? "--";
+}
+
+function isUsableState(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized !== "" && !["unknown", "unavailable", "none", "null", "nan"].includes(normalized);
+}
+
+function formatBatteryLabel(value?: Pick<EntityRef, "state" | "unit">) {
+  if (!value || !isUsableState(value.state)) return undefined;
+  const numeric = Number.parseFloat(String(value.state));
+  const unit = value.unit ?? "%";
+  return Number.isFinite(numeric) ? `${Math.round(numeric)}${unit}` : `${value.state}${unit}`;
 }
 
 function runtimeValue(board: BoardStatus) {
@@ -110,10 +121,7 @@ function runtimeTone(board: BoardStatus): "black" | "red" | "yellow" | "green" |
 }
 
 function boardBatteryValue(data: DashboardData, board?: BoardStatus) {
-  const boardBattery = findBoardBattery(data, board);
-  if (!boardBattery) return undefined;
-  const numeric = Number.parseFloat(boardBattery.state);
-  return Number.isFinite(numeric) ? `${Math.round(numeric)}${boardBattery.unit ?? "%"}` : `${boardBattery.state}${boardBattery.unit ?? "%"}`;
+  return formatBatteryLabel(findBoardBattery(data, board));
 }
 
 function mcpValue(data: DashboardData) {
@@ -214,7 +222,7 @@ function roomHumidityItem(data: DashboardData): EntityRef[] {
 
 function findBoardBattery(data: DashboardData, board?: BoardStatus) {
   const direct = board?.sensors?.Battery;
-  if (direct) {
+  if (direct && isUsableState(direct.state)) {
     return {
       entityId: "ee04.battery",
       name: "EE04 Battery",
@@ -224,7 +232,7 @@ function findBoardBattery(data: DashboardData, board?: BoardStatus) {
     };
   }
   const candidates = [data.batteries.lowest, ...data.batteries.low].filter(Boolean) as EntityRef[];
-  return candidates.find((item) => /ee04|spectra|epaper|e-paper|dashboard/i.test(`${item.name} ${item.entityId}`));
+  return candidates.find((item) => isUsableState(item.state) && /ee04|spectra|epaper|e-paper|dashboard/i.test(`${item.name} ${item.entityId}`));
 }
 
 function hasPrinterSignal(data: DashboardData) {
@@ -379,7 +387,7 @@ export function resolvePreset(preset: string, ctx: PresetContext): unknown {
       const boardBattery = findBoardBattery(data, board);
       return {
         label: "Board Bat",
-        value: boardBattery ? `${boardBattery.state}${boardBattery.unit ?? "%"}` : "soon",
+        value: formatBatteryLabel(boardBattery) ?? "soon",
         tone: "blue"
       } satisfies StatTileValue;
     }
@@ -417,8 +425,8 @@ export function resolvePreset(preset: string, ctx: PresetContext): unknown {
   }
 }
 
-/** Find the board battery entity, exported for the top bar. */
-export { findBoardBattery, hasPrinterSignal, printerValue };
+/** Find and format the board battery entity, exported for the top bar. */
+export { findBoardBattery, formatBatteryLabel, hasPrinterSignal, printerValue };
 
 /**
  * Enumerable list of preset names handled by `resolvePreset` above, grouped

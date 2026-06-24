@@ -34,7 +34,7 @@ function stop(child) {
   });
 }
 
-function fixtureStates() {
+function fixtureStates({ batteryState = "83", voltageState = "4.08" } = {}) {
   const entity = (entity_id, state, attributes = {}) => ({ entity_id, state, attributes });
   return [
     entity("weather.forecast_home", "partlycloudy", { temperature: 72, humidity: 42, friendly_name: "Home Forecast" }),
@@ -43,8 +43,8 @@ function fixtureStates() {
     entity("sensor.zigtemp_humidity", "40", { device_class: "humidity", unit_of_measurement: "%", friendly_name: "Living Humidity" }),
     entity("binary_sensor.radar_presence_stable", "off", { device_class: "presence", friendly_name: "Living Presence" }),
     entity("light.ambient", "on", { friendly_name: "Ambient" }),
-    entity("sensor.ee04_spectra_dashboard_battery", "83", { device_class: "battery", unit_of_measurement: "%", friendly_name: "EE04 Battery" }),
-    entity("sensor.ee04_spectra_dashboard_battery_voltage", "4.08", { device_class: "voltage", unit_of_measurement: "V", friendly_name: "EE04 Battery Voltage" }),
+    entity("sensor.ee04_spectra_dashboard_battery", batteryState, { device_class: "battery", unit_of_measurement: "%", friendly_name: "EE04 Battery" }),
+    entity("sensor.ee04_spectra_dashboard_battery_voltage", voltageState, { device_class: "voltage", unit_of_measurement: "V", friendly_name: "EE04 Battery Voltage" }),
     entity("sensor.ee04_spectra_dashboard_uptime", "6", { device_class: "duration", unit_of_measurement: "s", friendly_name: "EE04 Uptime" }),
     entity("sensor.ee04_spectra_dashboard_boot_count", "9", { friendly_name: "EE04 Boot Count" }),
     entity("sensor.ee04_spectra_dashboard_previous_page_button_presses", "1", { friendly_name: "EE04 Previous Page Button Presses" }),
@@ -79,10 +79,12 @@ test("HA action API waits for a six-colour 800x480 image and persists page actio
     return;
   }
 
+  let boardBatteryState = "83";
+  let boardVoltageState = "4.08";
   const supervisor = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     let payload = [];
-    if (url.pathname === "/core/api/states") payload = fixtureStates();
+    if (url.pathname === "/core/api/states") payload = fixtureStates({ batteryState: boardBatteryState, voltageState: boardVoltageState });
     if (url.pathname === "/core/api/services/weather/get_forecasts") {
       payload = { service_response: { "weather.forecast_home": { forecast: [{ temperature: 76, templow: 58 }] } } };
     }
@@ -123,6 +125,10 @@ test("HA action API waits for a six-colour 800x480 image and persists page actio
   await waitFor(async () => (await fetch(`http://127.0.0.1:${appPort}/health`)).ok);
   await waitFor(() => existsSync(imagePath));
 
+  const initialBoard = await (await fetch(`http://127.0.0.1:${appPort}/data/board-status.json`)).json();
+  assert.equal(initialBoard.ok, true);
+  assert.equal(initialBoard.sensors.Battery.state, "83");
+
   const image = PNG.sync.read(await readFile(imagePath));
   assert.equal(image.width, 800);
   assert.equal(image.height, 480);
@@ -132,6 +138,16 @@ test("HA action API waits for a six-colour 800x480 image and persists page actio
 
   const rejected = await fetch(`http://127.0.0.1:${appPort}/v1/action?action=next`);
   assert.equal(rejected.status, 401, stderr);
+
+  boardBatteryState = "unavailable";
+  boardVoltageState = "unavailable";
+  const sleepyRefresh = await fetch(`http://127.0.0.1:${appPort}/v1/action?action=refresh&token=${token}`);
+  assert.equal(sleepyRefresh.status, 200, stderr);
+  const cachedBoard = await (await fetch(`http://127.0.0.1:${appPort}/data/board-status.json`)).json();
+  assert.equal(cachedBoard.ok, false);
+  assert.equal(cachedBoard.cachedFromLastOk, true);
+  assert.equal(cachedBoard.sensors.Battery.state, "83");
+  assert.equal(cachedBoard.sensors.Battery.cached, true);
 
   for (const [action, expectedPage] of [["next", "rooms"], ["prev", "home"], ["systems", "systems"], ["refresh", "systems"]]) {
     const response = await fetch(`http://127.0.0.1:${appPort}/v1/action?action=${action}&token=${token}`);
