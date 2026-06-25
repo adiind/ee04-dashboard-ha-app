@@ -19,4 +19,4 @@ RUN npm run build
 ENV CHROMIUM_PATH=/usr/bin/chromium-browser
 ENV NODE_ENV=production
 
-CMD ["node", "dashboard-server.mjs"]
+CMD ["/usr/bin/with-contenv", "node", "dashboard-server.mjs"]
