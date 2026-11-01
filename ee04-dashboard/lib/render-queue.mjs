@@ -31,18 +31,26 @@ export function createRenderQueue({
       const result = await Promise.race([
         work,
         new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`render timed out after ${timeoutMs}ms`)), timeoutMs);
+          timer = setTimeout(() => {
+            // Set before rejecting so a briefing job still inside render() can see
+            // that this attempt is over and must not start the home fallback.
+            session.abandoned = true;
+            cancelSession(session, log);
+            reject(new Error(`render timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
         })
       ]);
       log(`render finish reason=${reason} durationMs=${Date.now() - started}${describeResult(result)}`);
       return result;
     } catch (error) {
       failed = true;
+      session.abandoned = true;
       const message = String(error?.message || error).split("\n")[0];
       log(`render fail reason=${reason} durationMs=${Date.now() - started} error=${message}`);
       throw error;
     } finally {
       clearTimeout(timer);
+      if (failed) cancelSession(session, log);
       try {
         const closed = await closeWithin(session.page, cleanupTimeoutMs, log, "page close");
         if (failed || !closed) await discardBrowser(session, cleanupTimeoutMs, log);
@@ -53,6 +61,17 @@ export function createRenderQueue({
   }
 
   return { enqueue };
+}
+
+function cancelSession(session, log) {
+  const cancel = session.cancel;
+  session.cancel = undefined;
+  if (typeof cancel !== "function") return;
+  try {
+    cancel();
+  } catch (error) {
+    log(`cancel failed: ${error.message}`);
+  }
 }
 
 function describeResult(result) {

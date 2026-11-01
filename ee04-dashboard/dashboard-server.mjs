@@ -7,6 +7,8 @@ import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import { PNG } from "pngjs";
+import { bindBriefingChild, briefingTimeoutMs, renderEpaperImage, runBriefingRender } from "./lib/briefing.mjs";
+import { DEFAULT_PAGE, normalizePage, pageAfterAction } from "./lib/pages.mjs";
 import { createRenderQueue } from "./lib/render-queue.mjs";
 import { refreshDelayMs } from "./lib/schedule.mjs";
 
@@ -24,7 +26,7 @@ const PORT = Number.parseInt(process.env.EE04_PORT || "8099", 10);
 const SUPERVISOR_URL = (process.env.EE04_SUPERVISOR_URL || "http://supervisor").replace(/\/$/, "");
 const WIDTH = 800;
 const HEIGHT = 480;
-const PAGES = ["home", "rooms", "climate", "security", "agenda", "systems"];
+const BRIEFING_SCRIPT = join(APP_ROOT, "briefing", "render.py");
 const ACTIONS = new Set(["refresh", "prev", "systems", "next"]);
 const SENSITIVE_PATTERN = /(token|password|key)/i;
 const MIME = new Map([
@@ -428,13 +430,7 @@ function chromiumVersion() {
   });
 }
 
-async function renderNow(session, reason) {
-  session.release = () => {
-    browserPromise = undefined;
-  };
-  const snapshot = await buildRuntime();
-  runtime = { ...snapshot, pageState };
-  const renderedAt = new Date().toISOString();
+async function renderChromiumInto(session, outPath, renderedAt) {
   const browser = await getBrowser();
   session.browser = browser;
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1, colorScheme: "light" });
@@ -442,14 +438,53 @@ async function renderNow(session, reason) {
   const url = `${httpOrigin}/?renderedAt=${encodeURIComponent(renderedAt)}`;
   await page.goto(url, { waitUntil: "networkidle", timeout: 90_000 });
   const raw = await page.screenshot({ clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT }, timeout: 30_000 });
-  const spectra = quantizeSpectra(raw);
-  await mkdir(resolve(IMAGE_PATH, ".."), { recursive: true });
-  const temporary = `${IMAGE_PATH}.${process.pid}.tmp`;
-  await writeFile(temporary, spectra);
-  await rename(temporary, IMAGE_PATH);
+  await writeFile(outPath, quantizeSpectra(raw));
+}
+
+async function renderNow(session, reason) {
+  session.release = () => {
+    browserPromise = undefined;
+  };
+  try {
+    const snapshot = await buildRuntime();
+    runtime = { ...snapshot, pageState };
+  } catch (error) {
+    if (pageState.page !== "briefing") throw error;
+    log(`runtime snapshot failed during briefing: ${error.message}`);
+  }
+  const renderedAt = new Date().toISOString();
+  const outcome = await renderEpaperImage({
+    page: pageState.page,
+    imagePath: IMAGE_PATH,
+    log,
+    session,
+    renderBriefing: ({ outPath }) => runBriefingRender({
+      execFile,
+      script: BRIEFING_SCRIPT,
+      outPath,
+      timeoutMs: briefingTimeoutMs(),
+      env: process.env,
+      onChild: (child) => bindBriefingChild(session, child)
+    }),
+    renderQuantized: async ({ outPath, page }) => {
+      const previous = pageState;
+      if (page !== previous.page) {
+        pageState = { ...previous, page };
+        runtime = { ...runtime, pageState };
+      }
+      try {
+        await renderChromiumInto(session, outPath, renderedAt);
+      } finally {
+        if (previous.page === "briefing") {
+          pageState = previous;
+          runtime = { ...runtime, pageState };
+        }
+      }
+    }
+  });
   runtime.renderedAt = renderedAt;
   runtime.reason = reason;
-  return { page: pageState.page, renderedAt, imagePath: IMAGE_PATH };
+  return { page: outcome.page, renderedAt, imagePath: IMAGE_PATH, quantized: outcome.quantized };
 }
 
 function render(reason) {
@@ -478,9 +513,7 @@ function tokenMatches(value) {
 }
 
 async function applyAction(action) {
-  if (action === "prev") pageState.page = PAGES[(PAGES.indexOf(pageState.page) + PAGES.length - 1) % PAGES.length];
-  if (action === "next") pageState.page = PAGES[(PAGES.indexOf(pageState.page) + 1) % PAGES.length];
-  if (action === "systems") pageState.page = "systems";
+  pageState.page = pageAfterAction(pageState.page, action);
   pageState = { ...pageState, updatedAt: new Date().toISOString(), reason: action };
   await writeJsonAtomically(PAGE_STATE_PATH, pageState);
   return render(action);
@@ -514,8 +547,8 @@ async function start() {
   options = await loadOptions();
   options.timezone = options.timezone || "America/Chicago";
   await mkdir(STATE_DIR, { recursive: true });
-  pageState = await readJson(PAGE_STATE_PATH, { page: "home", updatedAt: new Date().toISOString(), reason: "startup" });
-  if (!PAGES.includes(pageState.page)) pageState.page = "home";
+  pageState = await readJson(PAGE_STATE_PATH, { page: DEFAULT_PAGE, updatedAt: new Date().toISOString(), reason: "startup" });
+  pageState.page = normalizePage(pageState.page);
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", httpOrigin);
     if (url.pathname === "/health") {

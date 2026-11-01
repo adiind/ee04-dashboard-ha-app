@@ -63,6 +63,23 @@ test("a hung screenshot times out, discards the browser, and the next render suc
   assert.match(logs.join("\n"), /render finish reason=refresh durationMs=\d+ page=rooms/);
 });
 
+test("a timed out job cancels in-flight work once, then the next render runs", { timeout: 2_000 }, async () => {
+  let cancelled = 0;
+  const queue = createRenderQueue({
+    timeoutMs: 30,
+    cleanupTimeoutMs: 20,
+    log() {}
+  });
+  const first = queue.enqueue("startup", async (session) => {
+    session.cancel = () => { cancelled += 1; };
+    await hungPromise();
+  });
+  await assert.rejects(first, /timed out after 30ms/);
+  assert.equal(cancelled, 1);
+  const second = await queue.enqueue("refresh", async () => ({ page: "home" }));
+  assert.equal(second.page, "home");
+});
+
 test("a hung page.close is time-boxed and a later render succeeds", { timeout: 2_000 }, async () => {
   const logs = [];
   const queue = createRenderQueue({

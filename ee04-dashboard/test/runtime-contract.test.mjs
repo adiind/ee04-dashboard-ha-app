@@ -12,6 +12,8 @@ import { PNG } from "pngjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const SPECTRA = new Set(["255,255,255", "17,17,17", "215,25,32", "247,198,0", "31,157,85", "18,97,166"]);
+const BRIEFING_PURE = new Set(["0,0,0", "255,255,255", "255,0,0", "255,255,0", "0,0,255", "0,255,0"]);
+const STARTUP_PALETTE = new Set([...SPECTRA, ...BRIEFING_PURE]);
 
 function listen(server) {
   return new Promise((resolvePromise) => server.listen(0, "127.0.0.1", () => resolvePromise(server.address().port)));
@@ -133,8 +135,10 @@ test("HA action API waits for a six-colour 800x480 image and persists page actio
   assert.equal(image.width, 800);
   assert.equal(image.height, 480);
   for (let index = 0; index < image.data.length; index += 4) {
-    assert.ok(SPECTRA.has(`${image.data[index]},${image.data[index + 1]},${image.data[index + 2]}`));
+    assert.ok(STARTUP_PALETTE.has(`${image.data[index]},${image.data[index + 1]},${image.data[index + 2]}`));
   }
+  const startupHealth = await (await fetch(`http://127.0.0.1:${appPort}/health`)).json();
+  assert.equal(startupHealth.page, "briefing");
 
   const rejected = await fetch(`http://127.0.0.1:${appPort}/v1/action?action=next`);
   assert.equal(rejected.status, 401, stderr);
@@ -149,13 +153,25 @@ test("HA action API waits for a six-colour 800x480 image and persists page actio
   assert.equal(cachedBoard.sensors.Battery.state, "83");
   assert.equal(cachedBoard.sensors.Battery.cached, true);
 
-  for (const [action, expectedPage] of [["next", "rooms"], ["prev", "home"], ["systems", "systems"], ["refresh", "systems"]]) {
+  for (const [action, expectedPage] of [["next", "home"], ["next", "rooms"], ["prev", "home"], ["systems", "systems"], ["refresh", "systems"]]) {
     const response = await fetch(`http://127.0.0.1:${appPort}/v1/action?action=${action}&token=${token}`);
     assert.equal(response.status, 200, stderr);
     const payload = await response.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.page, expectedPage);
+    assert.equal(payload.quantized, true);
     assert.ok(payload.renderedAt);
     assert.ok(existsSync(imagePath));
   }
+  const homeImage = PNG.sync.read(await readFile(imagePath));
+  assert.equal(homeImage.width, 800);
+  assert.equal(homeImage.height, 480);
+  for (let index = 0; index < homeImage.data.length; index += 4) {
+    assert.ok(SPECTRA.has(`${homeImage.data[index]},${homeImage.data[index + 1]},${homeImage.data[index + 2]}`));
+  }
+
+  const back = await fetch(`http://127.0.0.1:${appPort}/v1/action?action=next&token=${token}`);
+  assert.equal(back.status, 200, stderr);
+  const stored = await (await fetch(`http://127.0.0.1:${appPort}/health`)).json();
+  assert.equal(stored.page, "briefing");
 });
