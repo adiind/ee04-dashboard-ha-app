@@ -1,6 +1,6 @@
 name: EE04 Spectra Dashboard
 slug: ee04_spectra_dashboard
-version: 1.0.3
+version: 1.0.4
 description: Home Assistant-owned renderer and action service for the EE04 Spectra ePaper dashboard.
 url: https://github.com/adiind/ee04-dashboard-ha-app
 arch:
