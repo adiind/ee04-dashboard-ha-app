@@ -1,10 +1,17 @@
+import { execFile } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import { PNG } from "pngjs";
+import { createRenderQueue } from "./lib/render-queue.mjs";
+import { refreshDelayMs } from "./lib/schedule.mjs";
+
+const require = createRequire(import.meta.url);
+const PLAYWRIGHT_VERSION = require("playwright-core/package.json").version;
 
 const APP_ROOT = process.env.EE04_APP_ROOT || "/app";
 const DIST = resolve(APP_ROOT, "dist");
@@ -61,12 +68,13 @@ let options;
 let pageState;
 let runtime = {};
 let browserPromise;
-let renderQueue = Promise.resolve();
 let httpOrigin = "http://127.0.0.1:8099";
 
 function log(message) {
   console.log(`[ee04-dashboard] ${message}`);
 }
+
+const renders = createRenderQueue({ log });
 
 async function loadOptions() {
   try {
@@ -401,40 +409,65 @@ async function getBrowser() {
     browserPromise = chromium.launch({
       executablePath,
       headless: true,
+      timeout: 45_000,
       args: ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"]
+    }).catch((error) => {
+      browserPromise = undefined;
+      throw error;
     });
   }
   return browserPromise;
 }
 
-async function renderNow(reason) {
+function chromiumVersion() {
+  const executable = process.env.CHROMIUM_PATH || "/usr/bin/chromium-browser";
+  return new Promise((resolveVersion) => {
+    execFile(executable, ["--version"], { timeout: 5_000 }, (error, stdout) => {
+      resolveVersion(error ? `chromium unavailable (${executable})` : stdout.trim());
+    });
+  });
+}
+
+async function renderNow(session, reason) {
+  session.release = () => {
+    browserPromise = undefined;
+  };
   const snapshot = await buildRuntime();
   runtime = { ...snapshot, pageState };
   const renderedAt = new Date().toISOString();
   const browser = await getBrowser();
+  session.browser = browser;
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1, colorScheme: "light" });
-  try {
-    const url = `${httpOrigin}/?renderedAt=${encodeURIComponent(renderedAt)}`;
-    await page.goto(url, { waitUntil: "networkidle", timeout: 90_000 });
-    const raw = await page.screenshot({ clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT } });
-    const spectra = quantizeSpectra(raw);
-    await mkdir(resolve(IMAGE_PATH, ".."), { recursive: true });
-    const temporary = `${IMAGE_PATH}.${process.pid}.tmp`;
-    await writeFile(temporary, spectra);
-    await rename(temporary, IMAGE_PATH);
-    runtime.renderedAt = renderedAt;
-    runtime.reason = reason;
-    log(`rendered ${pageState.page} for ${reason} at ${renderedAt}`);
-    return { page: pageState.page, renderedAt, imagePath: IMAGE_PATH };
-  } finally {
-    await page.close();
-  }
+  session.page = page;
+  const url = `${httpOrigin}/?renderedAt=${encodeURIComponent(renderedAt)}`;
+  await page.goto(url, { waitUntil: "networkidle", timeout: 90_000 });
+  const raw = await page.screenshot({ clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT }, timeout: 30_000 });
+  const spectra = quantizeSpectra(raw);
+  await mkdir(resolve(IMAGE_PATH, ".."), { recursive: true });
+  const temporary = `${IMAGE_PATH}.${process.pid}.tmp`;
+  await writeFile(temporary, spectra);
+  await rename(temporary, IMAGE_PATH);
+  runtime.renderedAt = renderedAt;
+  runtime.reason = reason;
+  return { page: pageState.page, renderedAt, imagePath: IMAGE_PATH };
 }
 
 function render(reason) {
-  const current = renderQueue.then(() => renderNow(reason));
-  renderQueue = current.catch(() => undefined);
-  return current;
+  return renders.enqueue(reason, (session) => renderNow(session, reason));
+}
+
+function armScheduledRender() {
+  let delay = 60_000;
+  try {
+    delay = refreshDelayMs(new Date(), options.timezone || "America/Chicago");
+  } catch (error) {
+    log(`schedule lookup failed: ${error.message}`);
+  }
+  log(`next scheduled render in ${Math.round(delay / 1000)}s`);
+  setTimeout(() => {
+    render("schedule").catch(() => undefined);
+    armScheduledRender();
+  }, delay);
 }
 
 function tokenMatches(value) {
@@ -503,8 +536,7 @@ async function start() {
       try {
         const result = await applyAction(action);
         json(response, 200, { ok: true, action, ...result });
-      } catch (error) {
-        log(`action ${action} render failed: ${error.message}`);
+      } catch {
         json(response, 503, { ok: false, error: "render unavailable" });
       }
       return;
@@ -516,7 +548,10 @@ async function start() {
     httpOrigin = `http://127.0.0.1:${PORT}`;
     log(`listening on ${PORT}; image target ${IMAGE_PATH}`);
     if (String(options.action_token || "").length < 24) log("WARNING: configure an action token of at least 24 characters before flashing the HA-native firmware.");
-    render("startup").catch((error) => log(`initial render failed: ${error.message}`));
+    if ((process.env.DEBUG || "").split(/[,\s]+/).includes("pw:api")) log("DEBUG=pw:api is enabled");
+    chromiumVersion().then((version) => log(`playwright-core ${PLAYWRIGHT_VERSION}; ${version}`));
+    render("startup").catch(() => undefined);
+    armScheduledRender();
   });
 }
 

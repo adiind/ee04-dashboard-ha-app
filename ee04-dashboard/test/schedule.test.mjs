@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EE04_SCHEDULE, nextWakeAt, scheduledRefreshesOnLocalDay } from "../lib/schedule.mjs";
+import { EE04_SCHEDULE, nextWakeAt, refreshDelayMs, scheduledRefreshesOnLocalDay } from "../lib/schedule.mjs";
 
 const zone = "America/Chicago";
 
@@ -48,4 +48,13 @@ test("spring DST skips the nonexistent 02:00 refresh", () => {
 
 test("fall DST preserves the repeated 01:00 boundary", () => {
   assert.equal(timeInChicago(nextWakeAt(localDate(2026, 11, 1, 1, 0, 15, "-05:00"))), "01:00:15");
+});
+
+test("a server refresh waits until the next daytime half-hour boundary", () => {
+  assert.equal(refreshDelayMs(localDate(2026, 1, 15, 7, 20, 0), zone), 10 * 60_000);
+  assert.equal(refreshDelayMs(localDate(2026, 1, 15, 7, 30, 0), zone), 30 * 60_000);
+});
+
+test("a server refresh stays hourly through the overnight window", () => {
+  assert.equal(refreshDelayMs(localDate(2026, 1, 15, 1, 20, 0), zone), 40 * 60_000);
 });

@@ -48,6 +48,11 @@ export function nextWakeAt(now = new Date(), timeZone = "America/Chicago", postB
   throw new Error("No EE04 wake boundary found in the next 48 hours.");
 }
 
+/** Milliseconds until the next wall-clock refresh boundary. */
+export function refreshDelayMs(now = new Date(), timeZone = "America/Chicago") {
+  return Math.max(0, nextWakeAt(now, timeZone, 0).getTime() - now.getTime());
+}
+
 export function scheduledRefreshesOnLocalDay(date, timeZone = "America/Chicago") {
   const targetDay = localDateKey(date, timeZone);
   let count = 0;
