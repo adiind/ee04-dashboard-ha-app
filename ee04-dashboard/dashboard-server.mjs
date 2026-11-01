@@ -8,7 +8,7 @@ import { extname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import { PNG } from "pngjs";
 import { bindBriefingChild, briefingTimeoutMs, renderEpaperImage, runBriefingRender } from "./lib/briefing.mjs";
-import { DEFAULT_PAGE, normalizePage, pageAfterAction } from "./lib/pages.mjs";
+import { DEFAULT_PAGE, resolvePageState } from "./lib/pages.mjs";
 import { createRenderQueue } from "./lib/render-queue.mjs";
 import { refreshDelayMs } from "./lib/schedule.mjs";
 
@@ -441,10 +441,24 @@ async function renderChromiumInto(session, outPath, renderedAt) {
   await writeFile(outPath, quantizeSpectra(raw));
 }
 
+async function syncPage(reason, now = new Date()) {
+  const previous = pageState;
+  const next = resolvePageState(previous, reason, now);
+  const changed = !previous || next.page !== previous.page || next.lastButtonAt !== previous.lastButtonAt;
+  pageState = next;
+  runtime = { ...runtime, pageState };
+  if (!changed && reason !== "startup") return;
+  if (previous && next.page === DEFAULT_PAGE && previous.page !== DEFAULT_PAGE) {
+    log(`returning to briefing; last button ${previous.lastButtonAt || "none"}`);
+  }
+  await writeJsonAtomically(PAGE_STATE_PATH, pageState);
+}
+
 async function renderNow(session, reason) {
   session.release = () => {
     browserPromise = undefined;
   };
+  if (reason === "schedule") await syncPage(reason);
   try {
     const snapshot = await buildRuntime();
     runtime = { ...snapshot, pageState };
@@ -513,9 +527,7 @@ function tokenMatches(value) {
 }
 
 async function applyAction(action) {
-  pageState.page = pageAfterAction(pageState.page, action);
-  pageState = { ...pageState, updatedAt: new Date().toISOString(), reason: action };
-  await writeJsonAtomically(PAGE_STATE_PATH, pageState);
+  await syncPage(action);
   return render(action);
 }
 
@@ -547,8 +559,8 @@ async function start() {
   options = await loadOptions();
   options.timezone = options.timezone || "America/Chicago";
   await mkdir(STATE_DIR, { recursive: true });
-  pageState = await readJson(PAGE_STATE_PATH, { page: DEFAULT_PAGE, updatedAt: new Date().toISOString(), reason: "startup" });
-  pageState.page = normalizePage(pageState.page);
+  pageState = await readJson(PAGE_STATE_PATH, null);
+  await syncPage("startup");
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", httpOrigin);
     if (url.pathname === "/health") {
