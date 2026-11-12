@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Homebase EE04 Spectra briefing renderer.
+"""Homebase EE04 Spectra briefing renderer — v3 ("actionable" layout).
 
-Composes Adi's daily briefing over a pre-made background and writes a
-palette-clean 800x480 PNG (exactly 6 colours, nearest-colour, no dither).
+Content comes from Alfred via sensor.alfred_briefing (attributes: top, today[], week[], for_date, updated).
+Items are rendered as given (no re-filtering). If that sensor is missing, unavailable or >18 h old,
+falls back to Adi's own calendars (holidays/birthdays/family/team calendars removed, TA-course Canvas
+items dropped) and shows a small "calendar fallback" marker.
 
-Token-free: the HA token is read from the HA_TOKEN env var at runtime only
-(or, when run as an HA add-on, SUPERVISOR_TOKEN against http://supervisor/core).
-Nothing secret is stored in this file or written to disk.
+Layout (800x480, 6 inks, no dither): thin art frame (~14 px) around a full-bleed card;
+header = date + greeting | weather chip; red TOP-focus band; two columns TODAY/TOMORROW | THIS WEEK
+with a right-aligned time/tag column; items due within 48 h get a red tag chip.
+
+Token-free: the HA token is read from HA_TOKEN at runtime only (or SUPERVISOR_TOKEN inside the add-on).
 
 Usage:
-  HA_TOKEN=... python3 render.py --out briefing.png [--now 2026-11-01T22:30] [--mode auto|day|night]
-  python3 render.py --data snapshot.json --out x.png      # offline, from a saved snapshot
+  HA_TOKEN=... python3 render.py --out briefing.png [--now 2026-11-12T09:00] [--mode auto|day|night]
+  python3 render.py --data snapshot.json --briefing-json alfred.json --out x.png   # offline preview
+  --briefing-json injects an Alfred payload instead of reading sensor.alfred_briefing (nothing is written to HA).
+  --no-briefing forces the calendar fallback.
 Env: HA_URL (default http://100.110.52.70:8123), HA_SOCKS (default socks5h://127.0.0.1:1055, "" to disable)
 """
 import argparse, datetime as dt, html, json, os, re, subprocess, sys, tempfile
@@ -23,27 +29,29 @@ W, H = 800, 480
 PALETTE = {"black": (0, 0, 0), "white": (255, 255, 255), "red": (255, 0, 0),
            "yellow": (255, 255, 0), "blue": (0, 0, 255), "green": (0, 255, 0)}
 PAL = list(PALETTE.values())
-# The live add-on emits these device RGBs for the same six inks; --emit addon remaps 1:1 if the firmware needs them.
 ADDON_RGB = {(0, 0, 0): (17, 17, 17), (255, 255, 255): (255, 255, 255), (255, 0, 0): (215, 25, 32),
              (255, 255, 0): (247, 198, 0), (0, 0, 255): (18, 97, 166), (0, 255, 0): (31, 157, 85)}
 NIGHT_START, NIGHT_END = 22, 6
+STALE_HOURS = 18
 WEATHER = "weather.forecast_home"
-BRIEFING_SENSORS = ["sensor.daily_briefing", "sensor.alfred_daily_briefing", "sensor.alfred_briefing"]
-CALENDARS = [  # (entity, short tag) — duplicates (_2) and test calendars intentionally left out
-    "calendar.adityaagarwal2027_u_northwestern_edu", "calendar.aditya_agarwal_calendar_canvas",
-    "calendar.family", "calendar.team_mclovin", "calendar.adiind_yahoo_co_in",
-    "calendar.birthdays", "calendar.holidays_in_india",
+BRIEFING_SENSOR = "sensor.alfred_briefing"
+CALENDARS = [  # fallback only. Removed on purpose: holidays_in_india, birthdays, family, team_mclovin (+ _2 dupes)
+    "calendar.adityaagarwal2027_u_northwestern_edu",
+    "calendar.aditya_agarwal_calendar_canvas",
+    "calendar.adiind_yahoo_co_in",
 ]
 CONDITIONS = {"clear-night": "Clear", "cloudy": "Cloudy", "exceptional": "Alert", "fog": "Foggy",
               "hail": "Hail", "lightning": "Storms", "lightning-rainy": "Storms", "partlycloudy": "Partly cloudy",
               "pouring": "Pouring", "rainy": "Rain", "snowy": "Snow", "snowy-rainy": "Sleet",
               "sunny": "Sunny", "windy": "Windy", "windy-variant": "Windy"}
-PRIORITY = re.compile(r"\b(due|deadline|exam|midterm|mid[- ]term|final|quiz|submit|submission|assignment|"
-                      r"check-?in|presentation|present|interview|birthday|flight|appointment|review|demo)\b", re.I)
-
-
+DEADLINE = re.compile(r"\b(due|deadline|exam|midterm|mid[- ]term|final|quiz|submit|submission|send|reply|answer|"
+                      r"apply|interview|flight|appointment|presentation|present)\b", re.I)
 NOISE = re.compile(r"^(\*\*zoom|\d{4}(FA|WI|SP|SU)_)", re.I)      # Canvas mirrors of class sessions
-ROUTINE = re.compile(r"^(TA\b|[A-Z]{2,8} \d{3}\S* —)|recurring|weekly|class day", re.I)  # classes / standing meetings
+ROUTINE = re.compile(r"^(TA\b|[A-Z]{2,8} \d{3}\S* —)|recurring|weekly|class day", re.I)
+TA_COURSE = re.compile(r"(?:MPD|DSGN)[\s_-]*(?:\d{3}[-\d]*_\w*?_AND_)?(?:416|401|410)(?!\d)", re.I)
+TIME_RE = re.compile(r"^(\d{1,2}:\d{2}\s?(?:[ap]m?)?|\d{1,2}\s?[ap]m?)\s+(.+)$", re.I)
+TAG_RE = re.compile(r"^(Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun|Today|Tonight|Tmrw|Tomorrow|\d{1,2}/\d{1,2})\b[:,]?\s+(.+)$", re.I)
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
 def font(weight, size):
@@ -90,7 +98,7 @@ class HAClient:
         return self._req("POST", path, body)
 
 
-def fetch_snapshot(now):
+def fetch_snapshot(now, want_briefing=True):
     """Pull everything the frame needs. Every source is optional."""
     snap = {"fetched_at": now.isoformat(), "errors": [], "sources": []}
     try:
@@ -107,19 +115,19 @@ def fetch_snapshot(now):
     try:
         fc = ha.post("/api/services/weather/get_forecasts?return_response",
                      {"entity_id": WEATHER, "type": "daily"})
-        days = fc["service_response"][WEATHER]["forecast"]
-        snap["forecast"] = days[:3]
+        snap["forecast"] = fc["service_response"][WEATHER]["forecast"][:4]
         snap["sources"].append("weather.get_forecasts")
     except Exception as e:
         snap["errors"].append(f"forecast: {e}")
-    for s in BRIEFING_SENSORS:
+    if want_briefing:
         try:
-            b = ha.get(f"/api/states/{s}")
+            b = ha.get(f"/api/states/{BRIEFING_SENSOR}")
             if b and b.get("state") not in (None, "unknown", "unavailable"):
-                snap["briefing"] = {"entity": s, "state": b["state"], **b.get("attributes", {})}
-                snap["sources"].append(s); break
-        except Exception:
-            pass
+                snap["briefing"] = {"entity": BRIEFING_SENSOR, "state": b["state"],
+                                    "_last_updated": b.get("last_updated"), **b.get("attributes", {})}
+                snap["sources"].append(BRIEFING_SENSOR)
+        except Exception as e:
+            snap["errors"].append(f"{BRIEFING_SENSOR}: {str(e)[-40:]}")
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + dt.timedelta(days=9)
     events = []
@@ -150,24 +158,113 @@ def parse_when(v):
     return dt.datetime(d.year, d.month, d.day, tzinfo=TZ), True
 
 
-def fmt_time(t):
-    h = t.hour % 12 or 12
-    return f"{h}{'' if t.minute == 0 else ':%02d' % t.minute}{'a' if t.hour < 12 else 'p'}"
+def hm(t):
+    return f"{t.hour % 12 or 12}:{t.minute:02d}"
 
 
-def build_lists(snap, now, night):
-    """Return (today_label, today_items, week_items); items are (tag, text, important)."""
+def _list(v):
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            v = [x for x in re.split(r"\s*[\n|;]\s*", v) if x]
+    return [str(x) for x in (v or []) if str(x).strip()]
+
+
+def tag_date(tag, base):
+    """Resolve 'Fri' / '11/17' / 'Tmrw' to a date on or after base (None if unknown)."""
+    t = tag.lower()
+    if t in ("today", "tonight"):
+        return base
+    if t in ("tmrw", "tomorrow"):
+        return base + dt.timedelta(days=1)
+    if "/" in t:
+        m, d = (int(x) for x in t.split("/"))
+        for y in (base.year, base.year + 1):
+            try:
+                c = dt.date(y, m, d)
+            except ValueError:
+                return None
+            if c >= base - dt.timedelta(days=60):
+                return c
+        return None
+    idx = DAYS.index(t[:3])
+    return base + dt.timedelta(days=(idx - base.weekday()) % 7)
+
+
+def briefing_state(snap, now):
+    """Return (payload, why_not). Payload is usable only if fresh and not for a past day."""
     b = snap.get("briefing")
-    if b and (b.get("today") or b.get("week")):
-        tl = [("", clean(x), False) for x in (b.get("today") or [])]
-        wl = [("", clean(x), False) for x in (b.get("week") or [])]
-        return "TODAY", tl, wl
-    focus = now.date()
-    label = "TODAY"
-    if night and now.hour >= NIGHT_START:
+    if not b:
+        return None, "missing"
+    today, week = _list(b.get("today")), _list(b.get("week"))
+    if not (today or week or b.get("top")):
+        return None, "empty"
+    stamp = b.get("updated") or b.get("_last_updated")
+    if stamp:
+        try:
+            ts = dt.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            ts = ts.replace(tzinfo=TZ) if ts.tzinfo is None else ts
+            if now - ts > dt.timedelta(hours=STALE_HOURS):
+                return None, "stale"
+        except ValueError:
+            pass
+    fd = None
+    if b.get("for_date"):
+        try:
+            fd = dt.date.fromisoformat(str(b["for_date"])[:10])
+        except ValueError:
+            fd = None
+        if fd and fd < now.date():
+            return None, "old for_date"
+    return {"top": clean(b.get("top") or b.get("state") or ""), "today": today, "week": week,
+            "for_date": fd, "updated": stamp, "injected": b.get("entity") == "--briefing-json"}, None
+
+
+def item(text, base, now, kind):
+    """-> dict(tag, text, red, dot). kind='today' splits a leading time, 'week' a day/date tag."""
+    text = clean(text)
+    if kind == "today":
+        m = TIME_RE.match(text)
+        if m:
+            return {"tag": m.group(1).replace(" ", ""), "text": m.group(2), "red": False, "dot": False}
+        return {"tag": "", "text": text, "red": False, "dot": True, "deadline": bool(DEADLINE.search(text))}
+    m = TAG_RE.match(text)
+    if m:
+        tg = m.group(1)
+        tg = tg[:3].capitalize() if not tg[0].isdigit() and tg.lower() not in ("today", "tonight", "tomorrow", "tmrw") else tg
+        d = tag_date(tg, base)
+        red = d is not None and 0 <= (d - now.date()).days <= 1    # due by end of tomorrow = within 48 h
+        return {"tag": tg, "text": m.group(2), "red": red, "dot": False}
+    return {"tag": "", "text": text, "red": False, "dot": True, "deadline": bool(DEADLINE.search(text))}
+
+
+def from_briefing(p, now):
+    focus = p["for_date"] or now.date()
+    label = "TOMORROW" if focus == now.date() + dt.timedelta(days=1) else "TODAY"
+    if focus > now.date() + dt.timedelta(days=1):
+        label = focus.strftime("%a").upper()
+    today = [item(x, focus, now, "today") for x in p["today"]]
+    week = [item(x, focus, now, "week") for x in p["week"]]
+    return {"label": label, "focus": focus, "top": p["top"], "today": today, "week": week,
+            "source": "alfred", "updated": p["updated"], "injected": p.get("injected")}
+
+
+def is_ta_canvas(ev):
+    if "canvas" not in ev.get("calendar", ""):
+        return False
+    blob = f"{ev.get('summary') or ''} {ev.get('description') or ''}"
+    return bool(TA_COURSE.search(blob))
+
+
+def from_calendars(snap, now, night):
+    focus, label = now.date(), "TODAY"
+    if now.hour >= 20:      # same evening switch as Alfred's next-day payloads
         focus, label = focus + dt.timedelta(days=1), "TOMORROW"
-    evs, seen = [], set()
+    evs, seen = [], {}
     for ev in snap.get("events", []):
+        if ev.get("calendar") not in CALENDARS or is_ta_canvas(ev):
+            continue
         try:
             s, allday = parse_when(ev["start"]); e, _ = parse_when(ev["end"])
         except Exception:
@@ -176,30 +273,39 @@ def build_lists(snap, now, night):
         if NOISE.search(raw):
             continue
         name = clean(raw)
-        cal = ev.get("calendar", "")
-        key = (name.lower(), s.date())
-        if key in seen:
+        nk = re.sub(r"[^a-z0-9 ]", "", name.lower()).strip()
+        day_names = seen.setdefault(s.date(), [])
+        if any(nk in o or o in nk for o in day_names):    # same event mirrored with a prefix, e.g. "[EDI] X" / "X"
             continue
-        seen.add(key)
-        important = bool(PRIORITY.search(name)) or "canvas" in cal or "holiday" in cal or "birthday" in cal
-        evs.append({"s": s, "e": e, "allday": allday, "name": name, "important": important,
-                    "routine": bool(ROUTINE.search(name)) and not important})
+        day_names.append(nk)
+        evs.append({"s": s, "e": e, "allday": allday, "name": name,
+                    "deadline": bool(DEADLINE.search(name)),   # no calendar-based boosts (Canvas/holiday/birthday)
+                    "routine": bool(ROUTINE.search(name))})
     evs.sort(key=lambda x: (x["s"], not x["allday"]))
-    today = [x for x in evs if (x["s"].date() <= focus < x["e"].date()) if x["allday"]] + \
+    today = [x for x in evs if x["allday"] and x["s"].date() <= focus < x["e"].date()] + \
             [x for x in evs if not x["allday"] and x["s"].date() == focus and (label != "TODAY" or x["e"] > now)]
-    today.sort(key=lambda x: (not x["allday"], x["s"]))
-    t_items = [("ALL DAY" if x["allday"] else fmt_time(x["s"]), x["name"], x["important"]) for x in today]
+    t_items = [{"tag": "" if x["allday"] else hm(x["s"]), "text": x["name"], "red": False,
+                "dot": x["allday"], "deadline": x["deadline"]} for x in today]
     wk_start, wk_end = focus + dt.timedelta(days=1), focus + dt.timedelta(days=7)
-    week, names = [], set()
+    week, names = [], {x["name"].lower() for x in today}
     for x in evs:
         d = x["s"].date()
         if wk_start <= d <= wk_end and not x["routine"] and x["name"].lower() not in names:
             names.add(x["name"].lower()); week.append(x)
-    # Deadlines/one-offs first, then fill, then show in date order.
-    pick = sorted(week, key=lambda x: (not x["important"], x["s"]))[:6]
-    pick.sort(key=lambda x: x["s"])
-    w_items = [(x["s"].strftime("%a"), x["name"], x["important"]) for x in pick]
-    return label, t_items, w_items
+    pick_ = sorted(week, key=lambda x: (not x["deadline"], x["s"]))[:6]
+    pick_.sort(key=lambda x: x["s"])
+    w_items = []
+    for x in pick_:
+        d = x["s"].date()
+        tg = x["s"].strftime("%a") if (d - now.date()).days < 7 else f"{d.month}/{d.day}"
+        txt = x["name"] if x["allday"] else f"{hm(x['s'])} {x['name']}"
+        w_items.append({"tag": tg, "text": txt, "red": 0 <= (d - now.date()).days <= 1, "dot": False})
+    top = next((x["name"] for x in today if x["deadline"]), None) or \
+        next((f"Next due: {x['name']} ({x['s'].strftime('%a')})" for x in week if x["deadline"]), None) or \
+        next((f"Next: {x['name']}" for x in today), None) or \
+        next((f"Next: {x['name']} ({x['s'].strftime('%a')})" for x in week), "")
+    return {"label": label, "focus": focus, "top": top, "today": t_items, "week": w_items,
+            "source": "calendar", "updated": None}
 
 
 def greeting(now, night):
@@ -210,89 +316,148 @@ def greeting(now, night):
 
 
 # ------------------------------------------------------------ drawing ----
+THEMES = {
+    "day": {"card": "white", "ink": "black", "sub": "blue", "rule": "black", "time": "blue",
+            "top_fill": "red", "top_ink": "white", "top_tag_fill": "yellow", "top_tag_ink": "black",
+            "head_fill": "black", "head_ink": "yellow", "wx_fill": "yellow", "wx_ink": "black",
+            "chip_fill": "red", "chip_ink": "white", "tag": "black", "dot": "black", "dot_hot": "red", "faint": "blue"},
+    "night": {"card": "black", "ink": "white", "sub": "yellow", "rule": "white", "time": "yellow",
+              "top_fill": "blue", "top_ink": "white", "top_tag_fill": "yellow", "top_tag_ink": "black",
+              "head_fill": "yellow", "head_ink": "black", "wx_fill": "blue", "wx_ink": "white",
+              "chip_fill": "red", "chip_ink": "white", "tag": "white", "dot": "white", "dot_hot": "red", "faint": "yellow"},
+}
+
+
+def C(name):
+    return PALETTE[name]
+
+
 def fit_text(draw, text, weight, max_w, size, min_size):
     """Largest font <= size that fits max_w; truncate with an ellipsis at min_size."""
-    for s in range(size, min_size - 1, -2):
+    for s in range(size, min_size - 1, -1):
         f = font(weight, s)
         if draw.textlength(text, font=f) <= max_w:
             return text, f
     f = font(weight, min_size)
     while text and draw.textlength(text + "…", font=f) > max_w:
-        text = text[:-1].rstrip()
+        text = text[:-1].rstrip(" ,;:-/+&")
     return text + "…", f
 
 
-def ink_on(fill):
-    return PALETTE["black"] if fill in ("white", "yellow", "green") else PALETTE["white"]
+def truncate(draw, text, f, max_w):
+    if draw.textlength(text, font=f) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=f) > max_w:
+        text = text[:-1].rstrip(" ,;:-/+&")
+    return text + "…"
 
 
-def text_block(draw, box, lines, fill):
-    """Vertically centre lines of (text, weight, size, min_size, colour) in box.
-    Uses real glyph extents; shrinks all lines together before dropping the last one."""
+def wrap2(draw, text, f, max_w):
+    """Split into at most 2 lines on word boundaries; second line truncated."""
+    words, line1 = text.split(), ""
+    for i, w_ in enumerate(words):
+        trial = (line1 + " " + w_).strip()
+        if draw.textlength(trial, font=f) > max_w:
+            if not line1:
+                return [truncate(draw, text, f, max_w)]
+            return [line1, truncate(draw, " ".join(words[i:]), f, max_w)]
+        line1 = trial
+    return [line1]
+
+
+def cap_metrics(f):
+    """(top offset, height) of capital/digit glyphs, for optical vertical centring."""
+    b = f.getbbox("H8")
+    return b[1], b[3] - b[1]
+
+
+def text_center(draw, x, cy, text, f, fill, anchor_right=False):
+    top, h = cap_metrics(f)
+    if anchor_right:
+        x -= draw.textlength(text, font=f)
+    draw.text((x, cy - h / 2 - top), text, font=f, fill=fill)
+
+
+def layout_column(draw, items, width, tagw, size, row_h, avail_h):
+    """Return list of rows (item, lines) that fit avail_h at this font size, and how many were dropped."""
+    f = font("Bold", size)
+    rows, used = [], 0
+    for i, it in enumerate(items):
+        tw = width - tagw
+        lines, h = [truncate(draw, it["text"], f, tw)], row_h
+        if used + h > avail_h:
+            return rows, len(items) - i
+        rows.append((it, lines, h)); used += h
+    return rows, 0
+
+
+def draw_column(draw, box, label, items, empty, th, size, night):
     x0, y0, x1, y1 = box
-    pad, gap = 10, 4
-    avail = (y1 - y0) - 8
-    for scale in [1.0, 0.92, 0.85, 0.78, 0.7]:
-        rendered = []
-        for text, weight, size, mn, col in lines:
-            t, f = fit_text(draw, text, weight, x1 - x0 - 2 * pad, max(mn, int(size * scale)), mn)
-            top, bot = f.getbbox("Hg°")[1], f.getbbox("Hg°")[3]
-            rendered.append((t, f, col, top, bot - top))
-        total = sum(r[4] for r in rendered) + gap * (len(rendered) - 1)
-        if total <= avail:
-            break
-    while total > avail and len(rendered) > 1:
-        r = rendered.pop(); total -= r[4] + gap
-    y = y0 + ((y1 - y0) - total) // 2
-    for t, f, col, top, h in rendered:
-        draw.text((x0 + pad, y - top), t, font=f, fill=col)
-        y += h + gap
+    # Section header chip
+    hf = font("ExtraBold", 26)
+    lw = int(draw.textlength(label, font=hf)) + 20
+    draw.rectangle((x0, y0, x0 + lw, y0 + 32), fill=C(th["head_fill"]))
+    text_center(draw, x0 + 10, y0 + 16, label, hf, C(th["head_ink"]))
+    draw.line((x0 + lw, y0 + 31, x1, y0 + 31), fill=C(th["head_fill"]), width=2)
+    y = y0 + 40
+    if not items:
+        f = font("SemiBold", size)
+        text_center(draw, x0 + 6, y + 20, empty, f, C(th["faint"]))
+        return {"size": size, "dropped": 0}
+    tf = font("ExtraBold", size)
+    tags = [it["tag"] for it in items if it["tag"]]
+    tagw = (max(int(draw.textlength(t, font=tf)) for t in tags) + 22) if tags else 26
+    tagw = max(tagw, 26)
+    row_h = int(size * 1.55)
+    rows, dropped = layout_column(draw, items, x1 - x0, tagw, size, row_h, y1 - y)
+    if dropped:   # make room for a "+N more" line
+        rows, dropped = layout_column(draw, items, x1 - x0, tagw, size, row_h, y1 - y - 24)
+    f = font("Bold", size)
+    for it, lines, h in rows:
+        cy = y + row_h / 2
+        tx = x0 + tagw - 12
+        if it["tag"]:
+            tw_ = draw.textlength(it["tag"], font=tf)
+            if it.get("red"):
+                draw.rectangle((tx - tw_ - 5, cy - size * 0.48, tx + 5, cy + size * 0.48), fill=C(th["chip_fill"]))
+                text_center(draw, tx, cy, it["tag"], tf, C(th["chip_ink"]), anchor_right=True)
+            else:
+                col = th["time"] if items is not None and label not in ("THIS WEEK", "COMING UP") else th["tag"]
+                text_center(draw, tx, cy, it["tag"], tf, C(col), anchor_right=True)
+        else:
+            s = max(7, size // 3)
+            col = th["dot_hot"] if it.get("deadline") else th["dot"]
+            draw.rectangle((tx - s, cy - s / 2, tx, cy + s / 2), fill=C(col))
+        for li, ln in enumerate(lines):
+            text_center(draw, x0 + tagw, cy + li * int(size * 0.95), ln, f, C(th["ink"]))
+        y += h
+    if dropped:
+        mf = font("SemiBold", 20)
+        text_center(draw, x0 + tagw, y + 10, f"+{dropped} more", mf, C(th["faint"]))
+    return {"size": size, "dropped": dropped}
 
 
-def pick(items, n):
-    """Keep at most n items, preferring important ones, shown in time order."""
-    if len(items) <= n:
-        return items, 0
-    idx = sorted(range(len(items)), key=lambda i: (not items[i][2], i))[:n]
-    return [items[i] for i in sorted(idx)], len(items) - n
-
-
-def draw_panel(draw, box, fill, label, today, week, night):
-    x0, y0, x1, y1 = box
-    ink = ink_on(fill)
-    head = PALETTE["yellow"] if night else PALETTE["red"]
-    tagc = PALETTE["yellow"] if night else PALETTE["blue"]
-    pad, labw, gap = 16, 160, 14
-    inner = y1 - y0 - 2 * pad - gap
-    rows_avail = max(2, inner // 40)
-    row_h = min(46, inner // rows_avail)
-    nt = min(3 if rows_avail >= 6 or not week else 2, max(1, len(today)))
-    nw = max(1, min(4, rows_avail - nt, max(1, len(week))))
-    nt = min(nt, rows_avail - nw)
-    tagf, moref = font("SemiBold", 26), font("SemiBold", 22)
-    sections = [(label, today, nt, "Nothing scheduled"), ("COMING WEEK", week, nw, "Clear week ahead")]
-    y = y0 + pad
-    for si, (lab, items, n, empty) in enumerate(sections):
-        if si == 1:
-            draw.line((x0 + pad, y + gap // 2 - 3, x1 - pad, y + gap // 2 - 3), fill=head, width=3)
-            y += gap
-        sy = y
-        lt, lf = fit_text(draw, lab, "ExtraBold", labw - 14, 34, 24)
-        draw.text((x0 + pad, y + 2), lt, font=lf, fill=head)
-        shown, more = pick(items, n)
-        if more:
-            draw.text((x0 + pad, y + 40), f"+{more} more", font=moref, fill=ink)
-        if not shown:
-            shown = [("", empty, False)]
-        for tag, text, imp in shown:
-            tx = x0 + pad + labw
-            if tag:
-                draw.text((tx, y + 6), tag, font=tagf, fill=PALETTE["red"] if imp and not night else tagc)
-                tx += max(72, int(draw.textlength(tag, font=tagf)) + 12)
-            t, f = fit_text(draw, text, "Bold", x1 - pad - tx, 34, 26)
-            draw.text((tx, y), t, font=f, fill=ink)
-            y += row_h
-        y = max(y, sy + (68 if more else row_h))
+def best_size(draw, cols, max_size=30, min_size=22, trunc_size=26):
+    """Largest common size where every row fits on one line; else the largest <= trunc_size that fits
+    vertically (long rows then get an ellipsis rather than shrinking below a desk-readable size)."""
+    for s in range(max_size, min_size - 1, -1):
+        ok = True
+        for (box, items) in cols:
+            x0, y0, x1, y1 = box
+            tf = font("ExtraBold", s)
+            tags = [it["tag"] for it in items if it["tag"]]
+            tagw = max((max(int(draw.textlength(t, font=tf)) for t in tags) + 22) if tags else 26, 26)
+            f = font("Bold", s)
+            row_h = int(s * 1.55)
+            if row_h * len(items) > (y1 - y0 - 40) or \
+                    any(draw.textlength(it["text"], font=f) > (x1 - x0 - tagw) for it in items):
+                ok = False; break
+        if ok:
+            return s
+    for s in range(trunc_size, min_size - 1, -1):
+        if all(int(s * 1.55) * len(items) <= (b[3] - b[1] - 40) for b, items in cols):
+            return s
+    return min_size
 
 
 def quantize(img):
@@ -302,48 +467,121 @@ def quantize(img):
     return img.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE).convert("RGB")
 
 
-def render(snap, now, mode="auto", bg_override=None):
+def forecast_for(snap, day):
+    for fc in snap.get("forecast") or []:
+        try:
+            if dt.datetime.fromisoformat(fc["datetime"].replace("Z", "+00:00")).astimezone(TZ).date() == day:
+                return fc
+        except Exception:
+            pass
+    return None
+
+
+def render(snap, now, mode="auto", bg_override=None, force_fallback=False):
     layout = json.load(open(os.path.join(HERE, "layout.json")))
     night = (now.hour >= NIGHT_START or now.hour < NIGHT_END) if mode == "auto" else mode == "night"
+    th = THEMES["night" if night else "day"]
     pool = layout["night" if night else "day"]
     spec = next((p for p in pool if p["file"] == bg_override), None) or pool[now.date().toordinal() % len(pool)]
     bg_path = os.path.join(HERE, layout["bg_dir"], spec["file"])
     img = Image.open(bg_path).convert("RGB").resize((W, H)) if os.path.exists(bg_path) else \
-        Image.new("RGB", (W, H), PALETTE["black" if night else "white"])
+        Image.new("RGB", (W, H), C("red" if not night else "blue"))
+    img = quantize(img)
     d = ImageDraw.Draw(img)
     d.fontmode = "1"   # aliased glyphs: no anti-alias greys to snap
 
-    label, today, week = build_lists(snap, now, night)
-    # Greeting box
-    g = spec["greeting"]
-    ctx = now.strftime("%a %b ") + str(now.day)
-    n_today = len(today)
-    ctx += f"  ·  {n_today} {'tomorrow' if label == 'TOMORROW' else 'today'}" if n_today else \
-        ("  ·  free tomorrow" if label == "TOMORROW" else "  ·  nothing on today")
-    if snap.get("briefing", {}).get("headline"):
-        ctx = clean(snap["briefing"]["headline"])
-    gi = ink_on(g["fill"])
-    text_block(d, g["box"], [(greeting(now, night), "ExtraBold", 40, 26, gi), (ctx, "SemiBold", 24, 18, gi)], g["fill"])
-    # Temperature box (always shown)
-    t = spec["temp"]; ti = ink_on(t["fill"])
+    p, why = (None, "forced") if force_fallback else briefing_state(snap, now)
+    data = from_briefing(p, now) if p else from_calendars(snap, now, night)
+
+    F = layout.get("frame", 14)
+    cx0, cy0, cx1, cy1 = F, F, W - F, H - F
+    d.rectangle((cx0 - 3, cy0 - 3, cx1 + 2, cy1 + 2), fill=C("black"))
+    d.rectangle((cx0, cy0, cx1 - 1, cy1 - 1), fill=C(th["card"]))
+    pad = 14
+
+    # ---- header: date + greeting (left) | weather chip (right)
+    hy0, hy1 = cy0, cy0 + 62
+    wx0 = cx1 - 236
+    wfill = C(th["wx_fill"]); wink = C(th["wx_ink"])
+    d.rectangle((wx0, hy0, cx1 - 1, hy1), fill=wfill)
     w = snap.get("weather") or {}
     temp = w.get("temperature")
     big = f"{round(float(temp))}°" if temp not in (None, "") else "--°"
-    cond = CONDITIONS.get(w.get("state"), (w.get("state") or "weather n/a").replace("-", " ").capitalize())
-    fcs = snap.get("forecast") or []
-    fc = (fcs[1] if label == "TOMORROW" and len(fcs) > 1 else fcs[0]) if fcs else {}
+    bf = font("ExtraBold", 52)
+    text_center(d, wx0 + 12, (hy0 + hy1) / 2, big, bf, wink)
+    bx = wx0 + 12 + d.textlength(big, font=bf) + 10
+    cond = CONDITIONS.get(w.get("state"), (w.get("state") or "n/a").replace("-", " ").capitalize())
+    fc = forecast_for(snap, data["focus"]) or forecast_for(snap, now.date())
     hl = ""
-    if fc.get("temperature") is not None and fc.get("templow") is not None:
-        hl = f"{'Tmrw ' if label == 'TOMORROW' and len(fcs) > 1 else ''}H{round(fc['temperature'])} L{round(fc['templow'])}"
-    lines = [(big, "ExtraBold", 60 if t["box"][3] - t["box"][1] > 90 else 50, 34, ti), (cond, "SemiBold", 26, 18, ti)]
+    if fc and fc.get("temperature") is not None and fc.get("templow") is not None:
+        pre = data["focus"].strftime("%a ") if data["focus"] != now.date() else ""
+        hl = f"{pre}H{round(fc['temperature'])} L{round(fc['templow'])}"
+        if data["focus"] != now.date() and fc.get("condition"):
+            cond = f"now {cond.lower()}" if len(cond) < 9 else cond
+    sw = cx1 - 1 - bx - 8
+    ct, cf = fit_text(d, cond, "SemiBold", sw, 24, 18)
+    text_center(d, bx, hy0 + 19, ct, cf, wink)
     if hl:
-        lines.append((hl, "SemiBold", 24, 18, ti))
-    text_block(d, t["box"], lines, t["fill"])
-    # Panel
-    p = spec["panel"]
-    draw_panel(d, p["box"], p["fill"], label, today, week, night)
-    return quantize(img), {"background": spec["file"], "night": night, "label": label,
-                           "today": today, "week": week}
+        ht, hf_ = fit_text(d, hl, "Bold", sw, 24, 18)
+        text_center(d, bx, hy0 + 44, ht, hf_, wink)
+    # date + greeting
+    dtxt = now.strftime("%a %b ").upper() + str(now.day)
+    df = font("ExtraBold", 46)
+    text_center(d, cx0 + pad, (hy0 + hy1) / 2, dtxt, df, C(th["ink"]))
+    gx = cx0 + pad + d.textlength(dtxt, font=df) + 16
+    gt, gf = fit_text(d, greeting(now, night), "SemiBold", wx0 - gx - 10, 28, 20)
+    text_center(d, gx, (hy0 + hy1) / 2 + 4, gt, gf, C(th["sub"]))
+
+    # ---- TOP focus band
+    ty0, ty1 = hy1 + 4, hy1 + 4 + 54
+    d.rectangle((cx0, ty0, cx1 - 1, ty1), fill=C(th["top_fill"]))
+    lab = "FOCUS"
+    lf = font("ExtraBold", 24)
+    lw = int(d.textlength(lab, font=lf)) + 18
+    d.rectangle((cx0 + pad, ty0 + 12, cx0 + pad + lw, ty1 - 12), fill=C(th["top_tag_fill"]))
+    text_center(d, cx0 + pad + 9, (ty0 + ty1) / 2, lab, lf, C(th["top_tag_ink"]))
+    top = data["top"] or "No focus set"
+    tt, tf_ = fit_text(d, top, "ExtraBold", cx1 - (cx0 + pad + lw + 14) - pad, 40, 26)
+    text_center(d, cx0 + pad + lw + 14, (ty0 + ty1) / 2, tt, tf_, C(th["top_ink"]))
+
+    # ---- columns
+    by0, by1 = ty1 + 12, cy1 - 22
+    mid = cx0 + (cx1 - cx0) * 52 // 100
+    left = (cx0 + pad, by0, mid - 12, by1)
+    right = (mid + 14, by0, cx1 - pad, by1)
+    size = best_size(d, [(left, data["today"]), (right, data["week"])])
+    lab_l = data["label"] + (" · " + data["focus"].strftime("%a").upper() if data["label"] == "TOMORROW" else "")
+    r1 = draw_column(d, left, lab_l, data["today"], "Nothing left today" if data["label"] == "TODAY" and now.hour >= 12 else "Nothing scheduled", th, size, night)
+    r2 = draw_column(d, right, "THIS WEEK", data["week"], "Clear week ahead", th, size, night)
+    d.line((mid, by0 + 4, mid, by1), fill=C(th["rule"]), width=2)
+
+    # ---- footer marker
+    ff = font("SemiBold", 17)
+    if data["source"] == "alfred":
+        foot = "via Alfred"
+        if data.get("injected"):
+            foot += " (preview payload)"
+        elif data["updated"]:
+            try:
+                u = dt.datetime.fromisoformat(str(data["updated"]).replace("Z", "+00:00")).astimezone(TZ)
+                foot += f" · {u.hour % 12 or 12}:{u.minute:02d}{'a' if u.hour < 12 else 'p'}"
+            except ValueError:
+                pass
+        fcol = C(th["faint"])
+    else:
+        foot = f"calendar fallback ({why})"
+        fcol = C("red")
+    fw = d.textlength(foot, font=ff)
+    text_center(d, cx1 - pad - fw, cy1 - 11, foot, ff, fcol)
+    rt = f"rendered {now.hour % 12 or 12}:{now.minute:02d}{'a' if now.hour < 12 else 'p'}"
+    text_center(d, cx0 + pad, cy1 - 11, rt, ff, C(th["faint"]))
+
+    out = quantize(img)
+    return out, {"background": spec["file"], "night": night, "source": data["source"], "why_fallback": why,
+                 "label": data["label"], "font_px": size, "top": data["top"],
+                 "today": [f"{i['tag']}|{i['text']}" for i in data["today"]],
+                 "week": [f"{i['tag']}{'!' if i['red'] else ''}|{i['text']}" for i in data["week"]],
+                 "dropped": [r1["dropped"], r2["dropped"]]}
 
 
 def palette_ok(img):
@@ -359,22 +597,30 @@ def main():
     ap.add_argument("--bg", help="force a background file name from layout.json")
     ap.add_argument("--data", help="render from a saved snapshot JSON instead of HA")
     ap.add_argument("--save-data", help="write the fetched snapshot here")
+    ap.add_argument("--briefing-json", help="inject an Alfred payload {top,today,week,for_date?,updated?} "
+                                            "instead of reading sensor.alfred_briefing (preview; writes nothing to HA)")
+    ap.add_argument("--no-briefing", action="store_true", help="force the calendar fallback")
     ap.add_argument("--emit", choices=["pure", "addon"], default="pure",
                     help="pure = exact #000/#FFF/#F00/#FF0/#00F/#0F0; addon = the EE04 add-on's device RGBs")
     a = ap.parse_args()
     now = dt.datetime.fromisoformat(a.now).replace(tzinfo=TZ) if a.now else dt.datetime.now(TZ)
-    snap = json.load(open(a.data)) if a.data else fetch_snapshot(now)
+    snap = json.load(open(a.data)) if a.data else fetch_snapshot(now, want_briefing=not (a.briefing_json or a.no_briefing))
     if a.save_data:
         json.dump(snap, open(a.save_data, "w"), indent=1, default=str)
+    if a.briefing_json:
+        b = json.load(open(a.briefing_json))
+        b.setdefault("_last_updated", now.isoformat())   # injected snapshot counts as fresh unless 'updated' says otherwise
+        snap = {**snap, "briefing": {"entity": "--briefing-json", **b}}
+    if a.no_briefing:
+        snap = {k: v for k, v in snap.items() if k != "briefing"}
     img, info = render(snap, now, a.mode, a.bg)
     ok, cols = palette_ok(img)
     assert img.size == (W, H) and ok, f"palette violation: {cols}"
     if a.emit == "addon":
-        lut = {k: v for k, v in ADDON_RGB.items()}
         px = img.load()
         for y in range(H):
             for x in range(W):
-                px[x, y] = lut[px[x, y]]
+                px[x, y] = ADDON_RGB[px[x, y]]
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(a.out)), suffix=".png")
     os.close(fd); img.save(tmp, optimize=True); os.chmod(tmp, 0o644); os.replace(tmp, a.out)

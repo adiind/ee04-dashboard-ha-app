@@ -1,226 +1,228 @@
 {
- "_note": "Rectangles [x0,y0,x1,y1) measured from pixels by measure.py: largest solid-colour rectangle in each region. fill = box colour.",
- "palette": [
-  "#000000",
-  "#FFFFFF",
-  "#FF0000",
-  "#FFFF00",
-  "#0000FF",
-  "#00FF00"
- ],
- "bg_dir": "backgrounds",
- "day": [
-  {
-   "file": "01-lake-sunrise.png",
-   "greeting": {
-    "box": [
-     23,
-     11,
-     361,
-     80
-    ],
-    "fill": "yellow"
-   },
-   "temp": {
-    "box": [
-     569,
-     10,
-     777,
-     87
-    ],
-    "fill": "yellow"
-   },
-   "panel": {
-    "box": [
-     30,
-     204,
-     770,
-     441
-    ],
-    "fill": "white"
-   }
-  },
-  {
-   "file": "02-paper-planner.png",
-   "greeting": {
-    "box": [
-     25,
-     10,
-     432,
-     81
-    ],
-    "fill": "yellow"
-   },
-   "temp": {
-    "box": [
-     576,
-     10,
-     776,
-     116
-    ],
-    "fill": "yellow"
-   },
-   "panel": {
-    "box": [
-     37,
-     202,
-     764,
-     442
-    ],
-    "fill": "white"
-   }
-  },
-  {
-   "file": "09-botanical.png",
-   "greeting": {
-    "box": [
-     35,
-     12,
-     442,
-     80
-    ],
-    "fill": "yellow"
-   },
-   "temp": {
-    "box": [
-     566,
-     12,
-     721,
-     119
-    ],
-    "fill": "yellow"
-   },
-   "panel": {
-    "box": [
-     36,
-     179,
-     764,
-     430
-    ],
-    "fill": "white"
-   }
-  },
-  {
-   "file": "10-autumn-leaves.png",
-   "greeting": {
-    "box": [
-     25,
-     12,
-     372,
-     82
-    ],
-    "fill": "blue"
-   },
-   "temp": {
-    "box": [
-     576,
-     12,
-     776,
-     114
-    ],
-    "fill": "blue"
-   },
-   "panel": {
-    "box": [
-     24,
-     177,
-     776,
-     442
-    ],
-    "fill": "white"
-   }
-  }
- ],
- "night": [
-  {
-   "file": "13-night-starfield.png",
-   "greeting": {
-    "box": [
-     25,
-     12,
-     444,
-     81
-    ],
-    "fill": "black"
-   },
-   "temp": {
-    "box": [
-     582,
-     13,
-     775,
-     118
-    ],
-    "fill": "black"
-   },
-   "panel": {
-    "box": [
-     26,
-     174,
-     775,
-     453
-    ],
-    "fill": "black"
-   }
-  },
-  {
-   "file": "14-night-city.png",
-   "greeting": {
-    "box": [
-     26,
-     13,
-     410,
-     78
-    ],
-    "fill": "black"
-   },
-   "temp": {
-    "box": [
-     561,
-     18,
-     759,
-     114
-    ],
-    "fill": "black"
-   },
-   "panel": {
-    "box": [
-     29,
-     207,
-     771,
-     456
-    ],
-    "fill": "black"
-   }
-  },
-  {
-   "file": "15-minimal-ink.png",
-   "greeting": {
-    "box": [
-     27,
-     12,
-     442,
-     79
-    ],
-    "fill": "black"
-   },
-   "temp": {
-    "box": [
-     572,
-     12,
-     777,
-     109
-    ],
-    "fill": "black"
-   },
-   "panel": {
-    "box": [
-     62,
-     171,
-     738,
-     450
-    ],
-    "fill": "black"
-   }
-  }
- ]
+  "_note": "Rectangles [x0,y0,x1,y1) measured from pixels by measure.py: largest solid-colour rectangle in each region. fill = box colour.",
+  "palette": [
+    "#000000",
+    "#FFFFFF",
+    "#FF0000",
+    "#FFFF00",
+    "#0000FF",
+    "#00FF00"
+  ],
+  "bg_dir": "backgrounds",
+  "day": [
+    {
+      "file": "01-lake-sunrise.png",
+      "greeting": {
+        "box": [
+          23,
+          11,
+          361,
+          80
+        ],
+        "fill": "yellow"
+      },
+      "temp": {
+        "box": [
+          569,
+          10,
+          777,
+          87
+        ],
+        "fill": "yellow"
+      },
+      "panel": {
+        "box": [
+          30,
+          204,
+          770,
+          441
+        ],
+        "fill": "white"
+      }
+    },
+    {
+      "file": "02-paper-planner.png",
+      "greeting": {
+        "box": [
+          25,
+          10,
+          432,
+          81
+        ],
+        "fill": "yellow"
+      },
+      "temp": {
+        "box": [
+          576,
+          10,
+          776,
+          116
+        ],
+        "fill": "yellow"
+      },
+      "panel": {
+        "box": [
+          37,
+          202,
+          764,
+          442
+        ],
+        "fill": "white"
+      }
+    },
+    {
+      "file": "09-botanical.png",
+      "greeting": {
+        "box": [
+          35,
+          12,
+          442,
+          80
+        ],
+        "fill": "yellow"
+      },
+      "temp": {
+        "box": [
+          566,
+          12,
+          721,
+          119
+        ],
+        "fill": "yellow"
+      },
+      "panel": {
+        "box": [
+          36,
+          179,
+          764,
+          430
+        ],
+        "fill": "white"
+      }
+    },
+    {
+      "file": "10-autumn-leaves.png",
+      "greeting": {
+        "box": [
+          25,
+          12,
+          372,
+          82
+        ],
+        "fill": "blue"
+      },
+      "temp": {
+        "box": [
+          576,
+          12,
+          776,
+          114
+        ],
+        "fill": "blue"
+      },
+      "panel": {
+        "box": [
+          24,
+          177,
+          776,
+          442
+        ],
+        "fill": "white"
+      }
+    }
+  ],
+  "night": [
+    {
+      "file": "13-night-starfield.png",
+      "greeting": {
+        "box": [
+          25,
+          12,
+          444,
+          81
+        ],
+        "fill": "black"
+      },
+      "temp": {
+        "box": [
+          582,
+          13,
+          775,
+          118
+        ],
+        "fill": "black"
+      },
+      "panel": {
+        "box": [
+          26,
+          174,
+          775,
+          453
+        ],
+        "fill": "black"
+      }
+    },
+    {
+      "file": "14-night-city.png",
+      "greeting": {
+        "box": [
+          26,
+          13,
+          410,
+          78
+        ],
+        "fill": "black"
+      },
+      "temp": {
+        "box": [
+          561,
+          18,
+          759,
+          114
+        ],
+        "fill": "black"
+      },
+      "panel": {
+        "box": [
+          29,
+          207,
+          771,
+          456
+        ],
+        "fill": "black"
+      }
+    },
+    {
+      "file": "15-minimal-ink.png",
+      "greeting": {
+        "box": [
+          27,
+          12,
+          442,
+          79
+        ],
+        "fill": "black"
+      },
+      "temp": {
+        "box": [
+          572,
+          12,
+          777,
+          109
+        ],
+        "fill": "black"
+      },
+      "panel": {
+        "box": [
+          62,
+          171,
+          738,
+          450
+        ],
+        "fill": "black"
+      }
+    }
+  ],
+  "frame": 14,
+  "_note_v3": "v3: background art is only a ~14px frame around the content card (frame = px)."
 }
