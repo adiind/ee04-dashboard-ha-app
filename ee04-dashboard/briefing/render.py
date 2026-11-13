@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Homebase EE04 Spectra briefing renderer — v3 ("actionable" layout).
+"""Homebase EE04 Spectra briefing renderer — action list only.
 
 Content comes from Alfred via sensor.alfred_briefing (attributes: top, today[], week[], for_date, updated).
-Items are rendered as given (no re-filtering). If that sensor is missing, unavailable or >18 h old,
-falls back to Adi's own calendars (holidays/birthdays/family/team calendars removed, TA-course Canvas
-items dropped) and shows a small "calendar fallback" marker.
+Items are rendered as given. A valid list (present, non-empty, fresh, for today) is saved under
+/data/ee04-dashboard/last-briefing.json. If the sensor is missing, empty, stale, or for an older day,
+the last saved list is shown with a "list from <day time>" footer. With nothing saved, the frame
+keeps the header and weather and says "Waiting for Alfred's list".
 
 Layout (800x480, 6 inks, no dither): thin art frame (~14 px) around a full-bleed card;
 header = date + greeting | weather chip; red TOP-focus band; two columns TODAY/TOMORROW | THIS WEEK
@@ -16,7 +17,7 @@ Usage:
   HA_TOKEN=... python3 render.py --out briefing.png [--now 2026-11-12T09:00] [--mode auto|day|night]
   python3 render.py --data snapshot.json --briefing-json alfred.json --out x.png   # offline preview
   --briefing-json injects an Alfred payload instead of reading sensor.alfred_briefing (nothing is written to HA).
-  --no-briefing forces the calendar fallback.
+  --no-briefing shows the empty waiting state and does not read or write the saved list.
 Env: HA_URL (default http://100.110.52.70:8123), HA_SOCKS (default socks5h://127.0.0.1:1055, "" to disable)
 """
 import argparse, datetime as dt, html, json, os, re, subprocess, sys, tempfile
@@ -35,20 +36,12 @@ NIGHT_START, NIGHT_END = 22, 6
 STALE_HOURS = 18
 WEATHER = "weather.forecast_home"
 BRIEFING_SENSOR = "sensor.alfred_briefing"
-CALENDARS = [  # fallback only. Removed on purpose: holidays_in_india, birthdays, family, team_mclovin (+ _2 dupes)
-    "calendar.adityaagarwal2027_u_northwestern_edu",
-    "calendar.aditya_agarwal_calendar_canvas",
-    "calendar.adiind_yahoo_co_in",
-]
 CONDITIONS = {"clear-night": "Clear", "cloudy": "Cloudy", "exceptional": "Alert", "fog": "Foggy",
               "hail": "Hail", "lightning": "Storms", "lightning-rainy": "Storms", "partlycloudy": "Partly cloudy",
               "pouring": "Pouring", "rainy": "Rain", "snowy": "Snow", "snowy-rainy": "Sleet",
               "sunny": "Sunny", "windy": "Windy", "windy-variant": "Windy"}
 DEADLINE = re.compile(r"\b(due|deadline|exam|midterm|mid[- ]term|final|quiz|submit|submission|send|reply|answer|"
                       r"apply|interview|flight|appointment|presentation|present)\b", re.I)
-NOISE = re.compile(r"^(\*\*zoom|\d{4}(FA|WI|SP|SU)_)", re.I)      # Canvas mirrors of class sessions
-ROUTINE = re.compile(r"^(TA\b|[A-Z]{2,8} \d{3}\S* —)|recurring|weekly|class day", re.I)
-TA_COURSE = re.compile(r"(?:MPD|DSGN)[\s_-]*(?:\d{3}[-\d]*_\w*?_AND_)?(?:416|401|410)(?!\d)", re.I)
 TIME_RE = re.compile(r"^(\d{1,2}:\d{2}\s?(?:[ap]m?)?|\d{1,2}\s?[ap]m?)\s+(.+)$", re.I)
 TAG_RE = re.compile(r"^(Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun|Today|Tonight|Tmrw|Tomorrow|\d{1,2}/\d{1,2})\b[:,]?\s+(.+)$", re.I)
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -128,18 +121,6 @@ def fetch_snapshot(now, want_briefing=True):
                 snap["sources"].append(BRIEFING_SENSOR)
         except Exception as e:
             snap["errors"].append(f"{BRIEFING_SENSOR}: {str(e)[-40:]}")
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + dt.timedelta(days=9)
-    events = []
-    for cal in CALENDARS:
-        try:
-            q = f"?start={start.isoformat().replace('+', '%2B')}&end={end.isoformat().replace('+', '%2B')}"
-            for ev in ha.get(f"/api/calendars/{cal}{q}") or []:
-                ev["calendar"] = cal; events.append(ev)
-            snap["sources"].append(cal)
-        except Exception as e:
-            snap["errors"].append(f"{cal}: {e}")
-    snap["events"] = events
     return snap
 
 
@@ -149,17 +130,6 @@ def clean(text):
     t = re.sub(r"\[[^\]]*\]", "", t)            # Canvas course codes: [CCS_2026FA_...]
     t = re.sub(r"\s+", " ", t).strip(" -—·")
     return t or "(untitled)"
-
-
-def parse_when(v):
-    if "dateTime" in v:
-        return dt.datetime.fromisoformat(v["dateTime"]).astimezone(TZ), False
-    d = dt.date.fromisoformat(v["date"])
-    return dt.datetime(d.year, d.month, d.day, tzinfo=TZ), True
-
-
-def hm(t):
-    return f"{t.hour % 12 or 12}:{t.minute:02d}"
 
 
 def _list(v):
@@ -193,7 +163,10 @@ def tag_date(tag, base):
 
 
 def briefing_state(snap, now):
-    """Return (payload, why_not). Payload is usable only if fresh and not for a past day."""
+    """Return (payload, why_not). Valid means present, non-empty, fresh, and for today.
+
+    A missing for_date is treated as today. An earlier for_date is "old for_date".
+    """
     b = snap.get("briefing")
     if not b:
         return None, "missing"
@@ -214,9 +187,11 @@ def briefing_state(snap, now):
         try:
             fd = dt.date.fromisoformat(str(b["for_date"])[:10])
         except ValueError:
-            fd = None
-        if fd and fd < now.date():
             return None, "old for_date"
+        if fd < now.date():
+            return None, "old for_date"
+        if fd > now.date():
+            return None, "for_date"
     return {"top": clean(b.get("top") or b.get("state") or ""), "today": today, "week": week,
             "for_date": fd, "updated": stamp, "injected": b.get("entity") == "--briefing-json"}, None
 
@@ -250,62 +225,96 @@ def from_briefing(p, now):
             "source": "alfred", "updated": p["updated"], "injected": p.get("injected")}
 
 
-def is_ta_canvas(ev):
-    if "canvas" not in ev.get("calendar", ""):
-        return False
-    blob = f"{ev.get('summary') or ''} {ev.get('description') or ''}"
-    return bool(TA_COURSE.search(blob))
+def last_briefing_path():
+    explicit = os.environ.get("EE04_LAST_BRIEFING")
+    if explicit:
+        return explicit
+    state_dir = os.environ.get("EE04_STATE_DIR") or "/data/ee04-dashboard"
+    return os.path.join(state_dir, "last-briefing.json")
 
 
-def from_calendars(snap, now, night):
-    focus, label = now.date(), "TODAY"
-    if now.hour >= 20:      # same evening switch as Alfred's next-day payloads
-        focus, label = focus + dt.timedelta(days=1), "TOMORROW"
-    evs, seen = [], {}
-    for ev in snap.get("events", []):
-        if ev.get("calendar") not in CALENDARS or is_ta_canvas(ev):
-            continue
+def save_last_briefing(payload, now):
+    """Atomically store the last valid Alfred list. The saved_at time is local."""
+    path = last_briefing_path()
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    body = {
+        "saved_at": now.isoformat(),
+        "top": payload.get("top") or "",
+        "today": list(payload.get("today") or []),
+        "week": list(payload.get("week") or []),
+        "for_date": payload["for_date"].isoformat() if payload.get("for_date") else None,
+        "updated": payload.get("updated"),
+    }
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(body, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except Exception:
         try:
-            s, allday = parse_when(ev["start"]); e, _ = parse_when(ev["end"])
-        except Exception:
-            continue
-        raw = (ev.get("summary") or "").strip()
-        if NOISE.search(raw):
-            continue
-        name = clean(raw)
-        nk = re.sub(r"[^a-z0-9 ]", "", name.lower()).strip()
-        day_names = seen.setdefault(s.date(), [])
-        if any(nk in o or o in nk for o in day_names):    # same event mirrored with a prefix, e.g. "[EDI] X" / "X"
-            continue
-        day_names.append(nk)
-        evs.append({"s": s, "e": e, "allday": allday, "name": name,
-                    "deadline": bool(DEADLINE.search(name)),   # no calendar-based boosts (Canvas/holiday/birthday)
-                    "routine": bool(ROUTINE.search(name))})
-    evs.sort(key=lambda x: (x["s"], not x["allday"]))
-    today = [x for x in evs if x["allday"] and x["s"].date() <= focus < x["e"].date()] + \
-            [x for x in evs if not x["allday"] and x["s"].date() == focus and (label != "TODAY" or x["e"] > now)]
-    t_items = [{"tag": "" if x["allday"] else hm(x["s"]), "text": x["name"], "red": False,
-                "dot": x["allday"], "deadline": x["deadline"]} for x in today]
-    wk_start, wk_end = focus + dt.timedelta(days=1), focus + dt.timedelta(days=7)
-    week, names = [], {x["name"].lower() for x in today}
-    for x in evs:
-        d = x["s"].date()
-        if wk_start <= d <= wk_end and not x["routine"] and x["name"].lower() not in names:
-            names.add(x["name"].lower()); week.append(x)
-    pick_ = sorted(week, key=lambda x: (not x["deadline"], x["s"]))[:6]
-    pick_.sort(key=lambda x: x["s"])
-    w_items = []
-    for x in pick_:
-        d = x["s"].date()
-        tg = x["s"].strftime("%a") if (d - now.date()).days < 7 else f"{d.month}/{d.day}"
-        txt = x["name"] if x["allday"] else f"{hm(x['s'])} {x['name']}"
-        w_items.append({"tag": tg, "text": txt, "red": 0 <= (d - now.date()).days <= 1, "dot": False})
-    top = next((x["name"] for x in today if x["deadline"]), None) or \
-        next((f"Next due: {x['name']} ({x['s'].strftime('%a')})" for x in week if x["deadline"]), None) or \
-        next((f"Next: {x['name']}" for x in today), None) or \
-        next((f"Next: {x['name']} ({x['s'].strftime('%a')})" for x in week), "")
-    return {"label": label, "focus": focus, "top": top, "today": t_items, "week": w_items,
-            "source": "calendar", "updated": None}
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def load_last_briefing():
+    path = last_briefing_path()
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    today, week = _list(data.get("today")), _list(data.get("week"))
+    if not (today or week or data.get("top")):
+        return None
+    fd = None
+    if data.get("for_date"):
+        try:
+            fd = dt.date.fromisoformat(str(data["for_date"])[:10])
+        except ValueError:
+            fd = None
+    return {"top": clean(data.get("top") or ""), "today": today, "week": week, "for_date": fd,
+            "updated": data.get("updated"), "saved_at": data.get("saved_at"), "injected": False}
+
+
+def list_from_marker(saved_at):
+    """Footer text for a reused list: 'list from Fri 8:31a'."""
+    try:
+        stamp = dt.datetime.fromisoformat(str(saved_at).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return "list from saved"
+    stamp = stamp.replace(tzinfo=TZ) if stamp.tzinfo is None else stamp.astimezone(TZ)
+    clock = f"{stamp.hour % 12 or 12}:{stamp.minute:02d}{'a' if stamp.hour < 12 else 'p'}"
+    return f"list from {stamp.strftime('%a')} {clock}"
+
+
+def select_content(snap, now, force_empty=False):
+    """Choose the action list. A valid sensor payload is saved; a bad one reuses the last save."""
+    if force_empty:
+        return None, "forced"
+    payload, why = briefing_state(snap, now)
+    if payload:
+        try:
+            save_last_briefing(payload, now)
+        except OSError:
+            pass
+        return from_briefing(payload, now), None
+    saved = load_last_briefing()
+    if saved:
+        data = from_briefing(saved, now)
+        data["source"] = "saved"
+        data["saved_at"] = saved.get("saved_at")
+        return data, why
+    return None, why
 
 
 def greeting(now, night):
@@ -477,8 +486,9 @@ def forecast_for(snap, day):
     return None
 
 
-def render(snap, now, mode="auto", bg_override=None, force_fallback=False):
-    layout = json.load(open(os.path.join(HERE, "layout.json")))
+def render(snap, now, mode="auto", bg_override=None, force_empty=False):
+    with open(os.path.join(HERE, "layout.json")) as layout_file:
+        layout = json.load(layout_file)
     night = (now.hour >= NIGHT_START or now.hour < NIGHT_END) if mode == "auto" else mode == "night"
     th = THEMES["night" if night else "day"]
     pool = layout["night" if night else "day"]
@@ -490,8 +500,8 @@ def render(snap, now, mode="auto", bg_override=None, force_fallback=False):
     d = ImageDraw.Draw(img)
     d.fontmode = "1"   # aliased glyphs: no anti-alias greys to snap
 
-    p, why = (None, "forced") if force_fallback else briefing_state(snap, now)
-    data = from_briefing(p, now) if p else from_calendars(snap, now, night)
+    data, why = select_content(snap, now, force_empty=force_empty)
+    focus = data["focus"] if data else now.date()
 
     F = layout.get("frame", 14)
     cx0, cy0, cx1, cy1 = F, F, W - F, H - F
@@ -511,12 +521,12 @@ def render(snap, now, mode="auto", bg_override=None, force_fallback=False):
     text_center(d, wx0 + 12, (hy0 + hy1) / 2, big, bf, wink)
     bx = wx0 + 12 + d.textlength(big, font=bf) + 10
     cond = CONDITIONS.get(w.get("state"), (w.get("state") or "n/a").replace("-", " ").capitalize())
-    fc = forecast_for(snap, data["focus"]) or forecast_for(snap, now.date())
+    fc = forecast_for(snap, focus) or forecast_for(snap, now.date())
     hl = ""
     if fc and fc.get("temperature") is not None and fc.get("templow") is not None:
-        pre = data["focus"].strftime("%a ") if data["focus"] != now.date() else ""
+        pre = focus.strftime("%a ") if focus != now.date() else ""
         hl = f"{pre}H{round(fc['temperature'])} L{round(fc['templow'])}"
-        if data["focus"] != now.date() and fc.get("condition"):
+        if focus != now.date() and fc.get("condition"):
             cond = f"now {cond.lower()}" if len(cond) < 9 else cond
     sw = cx1 - 1 - bx - 8
     ct, cf = fit_text(d, cond, "SemiBold", sw, 24, 18)
@@ -532,32 +542,42 @@ def render(snap, now, mode="auto", bg_override=None, force_fallback=False):
     gt, gf = fit_text(d, greeting(now, night), "SemiBold", wx0 - gx - 10, 28, 20)
     text_center(d, gx, (hy0 + hy1) / 2 + 4, gt, gf, C(th["sub"]))
 
-    # ---- TOP focus band
-    ty0, ty1 = hy1 + 4, hy1 + 4 + 54
-    d.rectangle((cx0, ty0, cx1 - 1, ty1), fill=C(th["top_fill"]))
-    lab = "FOCUS"
-    lf = font("ExtraBold", 24)
-    lw = int(d.textlength(lab, font=lf)) + 18
-    d.rectangle((cx0 + pad, ty0 + 12, cx0 + pad + lw, ty1 - 12), fill=C(th["top_tag_fill"]))
-    text_center(d, cx0 + pad + 9, (ty0 + ty1) / 2, lab, lf, C(th["top_tag_ink"]))
-    top = data["top"] or "No focus set"
-    tt, tf_ = fit_text(d, top, "ExtraBold", cx1 - (cx0 + pad + lw + 14) - pad, 40, 26)
-    text_center(d, cx0 + pad + lw + 14, (ty0 + ty1) / 2, tt, tf_, C(th["top_ink"]))
+    waiting = "Waiting for Alfred's list"
+    if data:
+        # ---- TOP focus band
+        ty0, ty1 = hy1 + 4, hy1 + 4 + 54
+        d.rectangle((cx0, ty0, cx1 - 1, ty1), fill=C(th["top_fill"]))
+        lab = "FOCUS"
+        lf = font("ExtraBold", 24)
+        lw = int(d.textlength(lab, font=lf)) + 18
+        d.rectangle((cx0 + pad, ty0 + 12, cx0 + pad + lw, ty1 - 12), fill=C(th["top_tag_fill"]))
+        text_center(d, cx0 + pad + 9, (ty0 + ty1) / 2, lab, lf, C(th["top_tag_ink"]))
+        top = data["top"] or "No focus set"
+        tt, tf_ = fit_text(d, top, "ExtraBold", cx1 - (cx0 + pad + lw + 14) - pad, 40, 26)
+        text_center(d, cx0 + pad + lw + 14, (ty0 + ty1) / 2, tt, tf_, C(th["top_ink"]))
 
-    # ---- columns
-    by0, by1 = ty1 + 12, cy1 - 22
-    mid = cx0 + (cx1 - cx0) * 52 // 100
-    left = (cx0 + pad, by0, mid - 12, by1)
-    right = (mid + 14, by0, cx1 - pad, by1)
-    size = best_size(d, [(left, data["today"]), (right, data["week"])])
-    lab_l = data["label"] + (" · " + data["focus"].strftime("%a").upper() if data["label"] == "TOMORROW" else "")
-    r1 = draw_column(d, left, lab_l, data["today"], "Nothing left today" if data["label"] == "TODAY" and now.hour >= 12 else "Nothing scheduled", th, size, night)
-    r2 = draw_column(d, right, "THIS WEEK", data["week"], "Clear week ahead", th, size, night)
-    d.line((mid, by0 + 4, mid, by1), fill=C(th["rule"]), width=2)
+        # ---- columns
+        by0, by1 = ty1 + 12, cy1 - 22
+        mid = cx0 + (cx1 - cx0) * 52 // 100
+        left = (cx0 + pad, by0, mid - 12, by1)
+        right = (mid + 14, by0, cx1 - pad, by1)
+        size = best_size(d, [(left, data["today"]), (right, data["week"])])
+        lab_l = data["label"] + (" · " + data["focus"].strftime("%a").upper() if data["label"] == "TOMORROW" else "")
+        r1 = draw_column(d, left, lab_l, data["today"], "Nothing left today" if data["label"] == "TODAY" and now.hour >= 12 else "Nothing scheduled", th, size, night)
+        r2 = draw_column(d, right, "THIS WEEK", data["week"], "Clear week ahead", th, size, night)
+        d.line((mid, by0 + 4, mid, by1), fill=C(th["rule"]), width=2)
+        dropped = [r1["dropped"], r2["dropped"]]
+    else:
+        size = 0
+        dropped = [0, 0]
+        mf = font("SemiBold", 28)
+        mw = d.textlength(waiting, font=mf)
+        text_center(d, cx0 + (cx1 - cx0 - mw) / 2, (hy1 + cy1) / 2, waiting, mf, C(th["faint"]))
 
     # ---- footer marker
     ff = font("SemiBold", 17)
-    if data["source"] == "alfred":
+    foot = ""
+    if data and data["source"] == "alfred":
         foot = "via Alfred"
         if data.get("injected"):
             foot += " (preview payload)"
@@ -567,21 +587,23 @@ def render(snap, now, mode="auto", bg_override=None, force_fallback=False):
                 foot += f" · {u.hour % 12 or 12}:{u.minute:02d}{'a' if u.hour < 12 else 'p'}"
             except ValueError:
                 pass
-        fcol = C(th["faint"])
-    else:
-        foot = f"calendar fallback ({why})"
-        fcol = C("red")
-    fw = d.textlength(foot, font=ff)
-    text_center(d, cx1 - pad - fw, cy1 - 11, foot, ff, fcol)
+    elif data and data["source"] == "saved":
+        foot = list_from_marker(data.get("saved_at"))
+    if foot:
+        fw = d.textlength(foot, font=ff)
+        text_center(d, cx1 - pad - fw, cy1 - 11, foot, ff, C(th["faint"]))
     rt = f"rendered {now.hour % 12 or 12}:{now.minute:02d}{'a' if now.hour < 12 else 'p'}"
     text_center(d, cx0 + pad, cy1 - 11, rt, ff, C(th["faint"]))
 
     out = quantize(img)
-    return out, {"background": spec["file"], "night": night, "source": data["source"], "why_fallback": why,
-                 "label": data["label"], "font_px": size, "top": data["top"],
-                 "today": [f"{i['tag']}|{i['text']}" for i in data["today"]],
-                 "week": [f"{i['tag']}{'!' if i['red'] else ''}|{i['text']}" for i in data["week"]],
-                 "dropped": [r1["dropped"], r2["dropped"]]}
+    rows = data["today"] if data else []
+    week_rows = data["week"] if data else []
+    return out, {"background": spec["file"], "night": night, "source": data["source"] if data else "empty",
+                 "why_fallback": why, "footer": foot, "message": None if data else waiting,
+                 "label": data["label"] if data else "", "font_px": size, "top": data["top"] if data else "",
+                 "today": [f"{i['tag']}|{i['text']}" for i in rows],
+                 "week": [f"{i['tag']}{'!' if i['red'] else ''}|{i['text']}" for i in week_rows],
+                 "dropped": dropped}
 
 
 def palette_ok(img):
@@ -599,7 +621,7 @@ def main():
     ap.add_argument("--save-data", help="write the fetched snapshot here")
     ap.add_argument("--briefing-json", help="inject an Alfred payload {top,today,week,for_date?,updated?} "
                                             "instead of reading sensor.alfred_briefing (preview; writes nothing to HA)")
-    ap.add_argument("--no-briefing", action="store_true", help="force the calendar fallback")
+    ap.add_argument("--no-briefing", action="store_true", help="show the empty waiting state; ignore the sensor and the saved list")
     ap.add_argument("--emit", choices=["pure", "addon"], default="pure",
                     help="pure = exact #000/#FFF/#F00/#FF0/#00F/#0F0; addon = the EE04 add-on's device RGBs")
     a = ap.parse_args()
@@ -611,9 +633,7 @@ def main():
         b = json.load(open(a.briefing_json))
         b.setdefault("_last_updated", now.isoformat())   # injected snapshot counts as fresh unless 'updated' says otherwise
         snap = {**snap, "briefing": {"entity": "--briefing-json", **b}}
-    if a.no_briefing:
-        snap = {k: v for k, v in snap.items() if k != "briefing"}
-    img, info = render(snap, now, a.mode, a.bg)
+    img, info = render(snap, now, a.mode, a.bg, force_empty=a.no_briefing)
     ok, cols = palette_ok(img)
     assert img.size == (W, H) and ok, f"palette violation: {cols}"
     if a.emit == "addon":

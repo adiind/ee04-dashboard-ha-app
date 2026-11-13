@@ -1,6 +1,6 @@
 {
   "name": "ee04-dashboard-ha-app",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
     "test:render": "node --test test/render-queue.test.mjs",
     "test:briefing": "node --test test/briefing.test.mjs",
     "test:pages": "node --test test/page-timeout.test.mjs",
-    "test": "npm run test:schedule && npm run test:runtime && npm run test:render && npm run test:briefing && npm run test:pages"
+    "test:list": "python3 -m unittest discover -s test -p briefing_cache_test.py",
+    "test": "npm run test:schedule && npm run test:runtime && npm run test:render && npm run test:briefing && npm run test:pages && npm run test:list"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
