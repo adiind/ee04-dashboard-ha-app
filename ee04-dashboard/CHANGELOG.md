@@ -2,7 +2,7 @@
 
 ## 1.0.6
 
-- The briefing is Alfred's action list only. A valid sensor.alfred_briefing is saved under /data and shown again, with the time it was saved, when the sensor is missing; otherwise the panel waits for Alfred.
+- The briefing is Alfred's action list only. A valid sensor.alfred_briefing is saved under /data and shown again, with the time it was saved, when the sensor is missing; otherwise the panel waits for Alfred. List rows use the reference pitch: the image's Pillow is built with raqm so a line that fits at 24px is not dropped to 23px.
 
 ## 1.0.5
 
