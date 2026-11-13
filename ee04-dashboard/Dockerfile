@@ -20,11 +20,16 @@ RUN apk add --no-cache \
     py3-pillow \
     tzdata
 
-# Alpine's py3-pillow 11 is built without raqm, so text measures wider than the
-# reference renderer. One week line then misses fitting at 24px by a couple of
-# pixels, best_size drops to 23, and row pitch shrinks from 37 to 35.
-# Pillow 10.2 with raqm reproduces the reference frame.
+# Row pitch is int(font_size * 1.55). At 24px that is 37; at 23px it is 35.
+# Stock py3-pillow 11.3 is compiled without raqm, so `apk add libraqm` leaves
+# PIL.features.check("raqm") false and one week line measures 2px too wide.
+# best_size then drops 24 -> 23 and the rows pack tighter.
+# musllinux wheels do load raqm, but they bundle FreeType, so the valid frame
+# is not the reference: Pillow 11.3.0 misses 13 pixels and 10.4.0 misses 224.
+# Pillow 10.2 built against this image's FreeType matches all 384000 pixels.
+# py3-pillow is removed first so the pip install is the only Pillow.
 RUN apk add --no-cache libraqm fribidi \
+    && apk del py3-pillow \
     && apk add --no-cache --virtual .pillow-build \
         gcc \
         musl-dev \
