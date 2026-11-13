@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.6
+
+- The briefing is Alfred's action list only. A valid sensor.alfred_briefing is saved under /data and shown again, with the time it was saved, when the sensor is missing; otherwise the panel waits for Alfred.
+
 ## 1.0.5
 
 - v3 actionable briefing: reads sensor.alfred_briefing, filtered calendar fallback, full-screen layout
